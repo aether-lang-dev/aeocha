@@ -175,12 +175,13 @@ init() -> ptr {
 //                inside the trailing block can find passed/failed/depth)
 // ---------------------------------------------------------------------------
 
-_suite_new(name: string, fw: ptr) -> ptr {
+_suite_new(name: string, fw: ptr, parent: ptr) -> ptr {
     s = map_new()
     map_put_raw(s, "name", name)
     map_put_raw(s, "befores", list_new())
     map_put_raw(s, "afters",  list_new())
     map_put_raw(s, "fw",      fw)
+    map_put_raw(s, "parent",  parent)
     return s
 }
 
@@ -208,7 +209,12 @@ describe(_ctx: ptr, description: string) -> ptr {
     for (i = 0; i < d; i++) { print("  ") }
     println(description)
     ref_set(depth_ref, d + 1)
-    return _suite_new(description, fw)
+
+    parent = null
+    if map_has(_ctx, "fw") == 1 {
+        parent = _ctx
+    }
+    return _suite_new(description, fw, parent)
 }
 
 // ---------------------------------------------------------------------------
@@ -226,6 +232,36 @@ after_each(_ctx: ptr, teardown: fn) {
     list_add_raw(al, box_closure(teardown))
 }
 
+// Helper to run all before_each hooks for a suite and its ancestors,
+// from outer-most to inner-most.
+_run_befores(s: ptr) {
+    p = map_get_raw(s, "parent")
+    if p != null {
+        _run_befores(p)
+    }
+    befores = map_get_raw(s, "befores")
+    n = list_size(befores)
+    for (i = 0; i < n; i++) {
+        bh = list_get_raw(befores, i)
+        call(unbox_closure(bh))
+    }
+}
+
+// Helper to run all after_each hooks for a suite and its ancestors,
+// from inner-most to outer-most.
+_run_afters(s: ptr) {
+    afters = map_get_raw(s, "afters")
+    n = list_size(afters)
+    for (i = 0; i < n; i++) {
+        ah = list_get_raw(afters, i)
+        call(unbox_closure(ah))
+    }
+    p = map_get_raw(s, "parent")
+    if p != null {
+        _run_afters(p)
+    }
+}
+
 // ---------------------------------------------------------------------------
 // it() — one test case. Runs all befores, then the test, then all
 // afters. Failure is communicated by assertions inside the test body
@@ -239,13 +275,8 @@ it(_ctx: ptr, description: string, test_fn: fn) {
     failed_ref = map_get_raw(fw, "failed")
     depth_ref = map_get_raw(fw, "depth")
 
-    // Run before hooks
-    befores = map_get_raw(_ctx, "befores")
-    n_before = list_size(befores)
-    for (i = 0; i < n_before; i++) {
-        bh = list_get_raw(befores, i)
-        call(unbox_closure(bh))
-    }
+    // Run before hooks (inherited outer-to-inner)
+    _run_befores(_ctx)
 
     // Build a per-it record map and stash it as the "current" so
     // fail() can capture the first failure message into it. The
@@ -290,13 +321,8 @@ it(_ctx: ptr, description: string, test_fn: fn) {
     map_put_raw(it_rec, "duration_ms_str", "${duration_ms}")
     list_add_raw(its_list, it_rec)
 
-    // Run after hooks
-    afters = map_get_raw(_ctx, "afters")
-    n_after = list_size(afters)
-    for (i = 0; i < n_after; i++) {
-        ah = list_get_raw(afters, i)
-        call(unbox_closure(ah))
-    }
+    // Run after hooks (inherited inner-to-outer)
+    _run_afters(_ctx)
 }
 
 // ---------------------------------------------------------------------------
