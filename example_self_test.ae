@@ -1,12 +1,12 @@
 // Aeocha self-test — validates the test framework itself, by
 // importing it as a module (no inlined framework code, as in the
 // pre-rewrite version). Closes TODO items (1) and (2) end-to-end:
-// `import contrib.aeocha` works, the framework is reached via
+// `import aeocha` works, the framework is reached via
 // `aeocha.X` namespaced calls, and the bare `after` is gone (only
 // `after_each` remains).
 //
 // Run with:
-//   ae run contrib/aeocha/example_self_test.ae
+//   ae run aeocha/example_self_test.ae
 //
 // Expected: all green, exit 0.
 //
@@ -20,7 +20,7 @@
 // `it()` test callbacks, however, the callback is invoked outside
 // any builder context, so assertions need `fw` passed explicitly.
 
-import contrib.aeocha
+import aeocha
 import std.string
 
 main() {

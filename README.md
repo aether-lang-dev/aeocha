@@ -18,7 +18,7 @@ cd aeocha
 ## Quick Start
 
 ```aether
-import contrib.aeocha (*)
+import aeocha (*)
 
 main() {
     fw = init()

@@ -7,7 +7,7 @@
 //
 // Usage:
 //
-//     import contrib.aeocha
+//     import aeocha
 //
 //     main() {
 //         fw = aeocha.init()
@@ -64,7 +64,7 @@ extern string_equals(a: string, b: string) -> int
 // Used by the integration-shape `expect_*` matchers below to absorb
 // the bash-shaped "spawn / capture / awk-and-compare" idiom into a
 // single Aether call. Same inline-extern reasoning as the std.list /
-// std.map block above — keep contrib.aeocha standalone-importable
+// std.map block above — keep aeocha standalone-importable
 // without dragging the import-expansion path through all of std.
 extern string_split(str: string, delimiter: string) -> ptr
 extern string_array_size(arr: ptr) -> int

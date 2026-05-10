@@ -1,36 +1,29 @@
-# Notes to self (LLM assisting on Aether UI)
+Iy Notes to self (LLM assisting on Aeocha)
 
 Not a CLAUDE.md — short, opinionated, written for a future LLM picking up mid-task. Re-read at start of every session.
 
 ## Context
-This file covers UI/UX development for the Aether UI component. For language-level questions, the compiler, standard library, or general Aether idioms, consult the primary [Aether LLM.md](https://github.com/aether-lang-org/aether/blob/main/LLM.md).
-
-## What Aether UI is
-A declarative widget DSL for Aether, porting the Perry UI framework. It supports Linux (GTK4), macOS (AppKit), and Windows (native Win32), sharing a common backend ABI in `aether_ui_backend.h`.
+Aeocha is a BDD-style test framework for Aether, featuring `describe`, `it`, `before_each`, and `after_each` syntax. It's the primary test framework for Aether projects.
 
 ## Development Principles
-- **Config IS Code**: Aether UI follows the trailing-block builder pattern. Don't add config loaders; use the DSL.
-- **Cross-Platform ABI**: Any new widget functionality must be implemented in all three backends (GTK4, AppKit, Win32). Use the `aether_ui_backend.h` ABI as the single source of truth.
-- **Headless Testing**: All UI operations that would normally show a modal (alerts, file pickers) MUST honor the `AETHER_UI_HEADLESS` environment variable by returning early on CI to prevent hanging the test runner.
-- **AetherUIDriver**: The built-in HTTP test server is the primary way to test UI interactions. It must be maintained to expose widget state and mutations consistently across platforms.
+- **BDD Syntax**: Follow the `describe` and `it` pattern.
+- **Framework Context**: The `fw` context is threaded through most calls because Aether rejects mutable module-level identifiers.
+- **Integration Matchers**: Maintain the `expect_*` matchers for process and HTTP testing. These are designed to be high-level and reduce boilerplate in integration tests.
+- **IPC Reporting**: `run_summary` emits a structured v1 report if it detects a parent IPC channel (e.g., when run by `aeb`).
 
 ## Building / Testing
-- **Compiler**: Uses system-wide `aetherc` (v0.140.0+).
-- **Environment**: Headers are in `/usr/local/include/aether/`, libraries in `/usr/local/lib/aether/`.
-- **Build**: `./build.sh <source.ae> [output]`
-- **CI**: `./ci.sh` runs the full lifecycle: build, smoke test, and HTTP driver integration tests.
-- **Bootstrap**: If Aether is missing from `/usr/local/`, use `./bootstrap_aether.sh` to fetch and build it locally.
+- **Compiler**: Uses system-wide `ae` (v0.142.0+).
+- **Include Path**: When testing locally, set `AETHER_INCLUDE_PATH` to the repo root to use the local `aeocha.ae`.
+- **Integration Tests**: Run `./tests/integration/aeocha_aeb_ipc_reporting/test_aeocha_aeb_ipc_reporting.sh` etc.
+- **Bootstrap**: Use `./bootstrap_aether.sh` to fetch and build Aether locally if not installed.
 
 ## Files/dirs worth knowing
-- `aether_ui.ae`: The Aether-facing surface (imports, DSL wrappers).
-- `aether_ui_backend.h`: The backend ABI.
-- `aether_ui_<platform>.c/m`: The native platform implementations.
-- `aether_ui_test_server.c/h`: The shared HTTP test server implementation.
-- `ci.sh`: The canonical source of truth for the CI test pipeline.
-- `examples/`: The source of all example apps.
+- `aeocha.ae`: The core framework implementation and Aether-facing surface.
+- `tests/integration/`: Integration tests that exercise process and HTTP matchers.
+- `tests/regression/`: Regression tests for compiler features that Aeocha exercises.
+- `example_self_test.ae`: A good starting point for seeing how to use the framework.
 
 ## Idioms that keep biting
-- **Widget Registry**: Native widgets (GtkWidget*, NSView*) are registered in a flat global array and referenced via 1-based integers (`handle`). Never leak these handles.
-- **Sealing**: Use `aether_ui.seal_widget()` and `aether_ui.seal_subtree()` to protect widgets from automation in test environments.
-- **Imports**: All examples must use `import aether_ui`.
-- **CSS**: In the GTK4 backend, avoid global CSS. Apply styling using `aether_ui_apply_css` which scopes rules to a specific widget via a handle-derived class name (`.aui-{handle}`).
+- **Trailing Blocks**: Use the trailing block pattern for `describe`.
+- **Closure Capturing**: Be mindful of closure capturing rules in Aether when using hooks.
+
