@@ -1,0 +1,17 @@
+# Build artifacts
+.aether/
+build/
+*.o
+*.so
+*.a
+*.tar.gz
+
+# IDE / Editor files
+.vscode/
+.idea/
+*.swp
+*.swo
+.DS_Store
+
+# Test / Debug logs
+*.log
