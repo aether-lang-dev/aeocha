@@ -12,7 +12,7 @@ Aeocha is a BDD-style test framework for Aether, featuring `describe`, `it`, `be
 - **IPC Reporting**: `run_summary` emits a structured v1 report if it detects a parent IPC channel (e.g., when run by `aeb`).
 
 ## Building / Testing
-- **Compiler**: Uses system-wide `ae` (v0.142.0+).
+- **Compiler**: Uses system-wide `ae` (v0.161.0+ — `std.strbuilder` v2 in `_build_rows`, `string.char_at_n` in the stdout matchers; ≥0.157.0 is the hard floor for leak-clean heap-accumulator returns).
 - **Include Path**: When testing locally, set `AETHER_INCLUDE_PATH` to the repo root to use the local `aeocha.ae`.
 - **Integration Tests**: Run `./tests/integration/aeocha_aeb_ipc_reporting/test_aeocha_aeb_ipc_reporting.sh` etc.
 - **Bootstrap**: Use `./bootstrap_aether.sh` to fetch and build Aether locally if not installed.

@@ -44,6 +44,7 @@
 import std.list
 import std.map
 import std.string
+import std.strbuilder
 import std.http
 import std.ipc
 import std.net
@@ -477,11 +478,14 @@ expect_stdout_line_field(fw: ptr, out: string, prefix: string,
             // the line collecting non-whitespace spans into an
             // imaginary array indexed by `tok_idx`; when tok_idx
             // reaches `n` capture the span.
+            // char_at_n over char_at: line_len is already cached, so
+            // the length-aware accessor skips the per-call strlen
+            // char_at would pay on every byte of the line walk.
             line_len = string.length(line_ptr)
             tok_idx = 0
             p = 0
             while p < line_len {
-                c = string.char_at(line_ptr, p)
+                c = string.char_at_n(line_ptr, line_len, p)
                 if c == 32 || c == 9 {
                     p = p + 1
                 } else {
@@ -491,7 +495,7 @@ expect_stdout_line_field(fw: ptr, out: string, prefix: string,
                         if p >= line_len {
                             scanning = 0
                         } else {
-                            c2 = string.char_at(line_ptr, p)
+                            c2 = string.char_at_n(line_ptr, line_len, p)
                             if c2 == 32 || c2 == 9 {
                                 scanning = 0
                             } else {
@@ -546,6 +550,8 @@ expect_stdout_line_after(fw: ptr, out: string, prefix: string,
         if string.starts_with(line_ptr, prefix) == 1 {
             plen = string.length(prefix)
             llen = string.length(line_ptr)
+            // char_at_n over char_at: llen is already cached, so the
+            // length-aware accessor skips the per-call strlen.
             // Skip leading whitespace immediately after the prefix.
             start = plen
             scanning_lead = 1
@@ -553,7 +559,7 @@ expect_stdout_line_after(fw: ptr, out: string, prefix: string,
                 if start >= llen {
                     scanning_lead = 0
                 } else {
-                    c = string.char_at(line_ptr, start)
+                    c = string.char_at_n(line_ptr, llen, start)
                     if c == 32 || c == 9 {
                         start = start + 1
                     } else {
@@ -568,7 +574,7 @@ expect_stdout_line_after(fw: ptr, out: string, prefix: string,
                 if end <= start {
                     scanning_trail = 0
                 } else {
-                    c2 = string.char_at(line_ptr, end - 1)
+                    c2 = string.char_at_n(line_ptr, llen, end - 1)
                     if c2 == 32 || c2 == 9 {
                         end = end - 1
                     } else {
@@ -812,8 +818,12 @@ _format_aeb_report(fw: ptr, passed: int, failed: int) -> string {
 // Build the per-it rows, optionally including the
 // failure_message (if any) and duration_ms columns. Used by
 // _format_aeb_report's progressive truncation.
+//
+// Built through std.strbuilder rather than a `string.concat`
+// accumulator: a suite with many `it`s would otherwise pay an
+// O(N²) realloc-and-memcpy of the whole prefix on every row.
 _build_rows(its: ptr, n: int, with_msg: int, with_dur: int) -> string {
-    out = ""
+    b = strbuilder.new(1024)
     i = 0
     while i < n {
         it_rec = list.get_raw(its, i)
@@ -821,34 +831,37 @@ _build_rows(its: ptr, n: int, with_msg: int, with_dur: int) -> string {
         name = map.get_raw(it_rec, "name")
         idx = i + 1
 
-        // Base row: STATUS\tindex\t"name"
-        row = "${status}\t${idx}\t\"${name}\""
+        // Base row: STATUS\tindex\t"name"  (\t=9, "=34)
+        strbuilder.append(b, status)
+        strbuilder.append_byte(b, 9)
+        strbuilder.append_int(b, idx)
+        strbuilder.append_byte(b, 9)
+        strbuilder.append_byte(b, 34)
+        strbuilder.append(b, name)
+        strbuilder.append_byte(b, 34)
 
         if with_dur != 0 {
             dur_str = map.get_raw(it_rec, "duration_ms_str")
-            row = string.concat(row, "\t")
-            row = string.concat(row, dur_str)
+            strbuilder.append_byte(b, 9)
+            strbuilder.append(b, dur_str)
         }
 
         if with_msg != 0 {
             if map.has(it_rec, "failure_message") == 1 {
                 msg = map.get_raw(it_rec, "failure_message")
-                row = string.concat(row, "\t")
+                strbuilder.append_byte(b, 9)
                 // Cap individual messages at 256 chars to keep any
-                // single row bounded. Branching the concat avoids
-                // a `string_substring` const-qualifier warning when
-                // the variable is also assigned the unsliced ptr.
+                // single row bounded.
                 if string.length(msg) > 256 {
-                    row = string.concat(row, string.substring(msg, 0, 256))
+                    strbuilder.append(b, string.substring(msg, 0, 256))
                 } else {
-                    row = string.concat(row, msg)
+                    strbuilder.append(b, msg)
                 }
             }
         }
 
-        row = string.concat(row, "\n")
-        out = string.concat(out, row)
+        strbuilder.append_byte(b, 10)
         i = i + 1
     }
-    return out
+    return strbuilder.finish(b)
 }
