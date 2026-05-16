@@ -72,6 +72,15 @@ exports (
     run_summary
 )
 
+// Case-insensitive per-header lookup on a client HttpResponse.
+// Defined in the runtime's std/net/aether_http.c (linked in via the
+// `import std.net` above); the std.http module.ae doesn't surface a
+// wrapper, so expect_http_header binds the C symbol directly. Returns
+// "" when the header is absent; the pointer is borrowed (per-response
+// thread-local), valid until the next call — fine for the immediate
+// compare expect_http_header does.
+extern http_response_header_raw(resp: ptr, name: string) -> string
+
 // ---------------------------------------------------------------------------
 // Framework context — counters and depth, threaded through every call
 // ---------------------------------------------------------------------------
@@ -671,15 +680,14 @@ expect_http_body_contains(fw: ptr, resp: ptr, needle: string, msg: string) {
 }
 
 // expect_http_header(fw, resp, name, want, msg) — case-insensitive
-// header equality. Uses the same per-header accessor v2 exposes; v1
-// responses share the C struct so this works on both.
+// header equality. The header NAME is matched case-insensitively (per
+// RFC 7230); the VALUE is compared exactly. Multiple values for the
+// same header arrive joined with ", " from the runtime accessor.
 expect_http_header(fw: ptr, resp: ptr, name: string, want: string, msg: string) {
     if resp == 0 {
         fail(fw, "${msg} — null response")
     } else {
-        // actual = http.http_response_header_raw(resp, name)
-        // fail(fw, "${msg} — expect_http_header not implemented")
-        actual = "" 
+        actual = http_response_header_raw(resp, name)
         if string.equals(actual, want) == 0 {
             fail(fw, "${msg} — header '${name}' expected '${want}', got '${actual}'")
         }
