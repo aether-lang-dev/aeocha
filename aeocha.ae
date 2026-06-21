@@ -46,6 +46,7 @@ import std.map
 import std.string
 import std.strbuilder
 import std.http
+import std.http.client
 import std.ipc
 import std.net
 
@@ -65,10 +66,15 @@ exports (
     expect_stdout_line_after,
     expect_stdout_line_count,
     expect_stdout_matches,
-    // Integration-shape matchers — HTTP surface
+    // Integration-shape matchers — HTTP surface (low-level: caller
+    // owns the resp lifecycle)
     expect_http_status, expect_http_no_error,
-    expect_http_body_contains, expect_http_header,
+    expect_http_body_contains, expect_http_body_eq, expect_http_header,
     expect_http_body_json_field,
+    // High-level GET-and-assert matchers (do the request lifecycle for
+    // the caller — one line per asserted HTTP response)
+    expect_http_get_status,
+    expect_http_get_body_eq, expect_http_get_body_contains,
     run_summary
 )
 
@@ -679,6 +685,24 @@ expect_http_body_contains(fw: ptr, resp: ptr, needle: string, msg: string) {
     }
 }
 
+// expect_http_body_eq(fw, resp, want, msg) — response body EXACTLY
+// equals `want`. The exact-match sibling of expect_http_body_contains:
+// reach for this when a substring match is too loose — e.g. a body of
+// "5" must not satisfy a check that "50" would also pass. Binary-safe
+// via string.equals (same AetherString-aware path as _contains), so a
+// porter holding a resp already can assert exact bodies without a
+// hand-rolled compare.
+expect_http_body_eq(fw: ptr, resp: ptr, want: string, msg: string) {
+    if resp == 0 {
+        fail(fw, "${msg} — null response")
+    } else {
+        body = http.response_body(resp)
+        if string.equals(body, want) == 0 {
+            fail(fw, "${msg} — body expected '${want}', got '${body}'")
+        }
+    }
+}
+
 // expect_http_header(fw, resp, name, want, msg) — case-insensitive
 // header equality. The header NAME is matched case-insensitively (per
 // RFC 7230); the VALUE is compared exactly. Multiple values for the
@@ -715,6 +739,75 @@ expect_http_body_json_field(fw: ptr, resp: ptr, key: string,
         if string.contains(body, needle) == 0 {
             fail(fw, "${msg} — JSON field '${key}' != '${want}' in body")
         }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// High-level GET-and-assert matchers
+//
+// The low-level expect_http_* above all take a `resp` the caller must
+// build and free. Every integration-test consumer ends up re-writing
+// the same request / send_request / request_free / (assert) /
+// response_free dance. These three matchers hide that lifecycle: each
+// performs a GET, checks the transport, asserts, and frees the
+// response — so a test asserts an HTTP response in one line.
+//
+// All three reuse the low-level matchers internally so the underlying
+// semantics (status compare, exact/substring body) stay consistent.
+//
+// Lifecycle note: client.send_request already frees the response and
+// returns null on a transport error (DNS/connect/TLS/timeout), so the
+// `cerr != ""` branch must NOT call response_free — it would
+// double-free. Only the success branch owns `resp`.
+// ---------------------------------------------------------------------------
+
+// expect_http_get_status(fw, url, want_status, msg) — GET url, assert
+// the transport succeeded and the status equals want_status. Use this
+// for non-200 expectations (404, 500, redirects) where the body is not
+// the point.
+expect_http_get_status(fw: ptr, url: string, want_status: int, msg: string) {
+    req = client.request("GET", url)
+    resp, cerr = client.send_request(req)
+    client.request_free(req)
+    if string.equals(cerr, "") == 0 {
+        fail(fw, "${msg} — transport error: ${cerr}")
+    } else {
+        expect_http_status(fw, resp, want_status, "${msg} (${want_status})")
+        client.response_free(resp)
+    }
+}
+
+// expect_http_get_body_eq(fw, url, want, msg) — GET url, assert
+// transport ok + status 200 + body EXACTLY equals want. Prefer this
+// over _contains when the result must match exactly (e.g. GET
+// /add/2/3 returning "5" — "50" must not pass).
+expect_http_get_body_eq(fw: ptr, url: string, want: string, msg: string) {
+    req = client.request("GET", url)
+    resp, cerr = client.send_request(req)
+    client.request_free(req)
+    if string.equals(cerr, "") == 0 {
+        fail(fw, "${msg} — transport error: ${cerr}")
+    } else {
+        expect_http_status(fw, resp, 200, "${msg} (200)")
+        expect_http_body_eq(fw, resp, want, msg)
+        client.response_free(resp)
+    }
+}
+
+// expect_http_get_body_contains(fw, url, needle, msg) — GET url,
+// assert transport ok + status 200 + body contains needle. The
+// substring twin of expect_http_get_body_eq — use when the body is a
+// larger document and only a marker matters.
+expect_http_get_body_contains(fw: ptr, url: string, needle: string, msg: string) {
+    req = client.request("GET", url)
+    resp, cerr = client.send_request(req)
+    client.request_free(req)
+    if string.equals(cerr, "") == 0 {
+        fail(fw, "${msg} — transport error: ${cerr}")
+    } else {
+        expect_http_status(fw, resp, 200, "${msg} (200)")
+        expect_http_body_contains(fw, resp, needle, msg)
+        client.response_free(resp)
     }
 }
 

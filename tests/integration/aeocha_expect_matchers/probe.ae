@@ -145,9 +145,26 @@ run_http_section(fw: ptr) {
             aeocha.expect_http_body_contains(fw, resp, "demo", "body has demo")
             aeocha.expect_http_header(fw, resp, "X-Node-Hash", "abc123", "node hash header")
             aeocha.expect_http_body_json_field(fw, resp, "head", "3", "head=3 in JSON")
-            println("  ✓ all 5 HTTP matchers ran against tape")
+            // Exact-body matcher against a resp the caller already holds.
+            // /add/2/3 below proves the GET-level twin; this proves the
+            // low-level sibling of expect_http_body_contains.
+            aeocha.expect_http_body_eq(fw, resp, "{\"head\":\"3\",\"name\":\"demo\"}",
+                "exact body equals tape")
+            println("  ✓ all 6 low-level HTTP matchers ran against tape")
             client.response_free(resp)
         }
+
+        // --- High-level GET-and-assert matchers ---------------------
+        // These do the request/send/free lifecycle internally, so each
+        // is one line. /add/2/3 returns exactly "5" — the canonical
+        // case for body_eq over body_contains ("5" must not match "50").
+        base = "http://127.0.0.1:${PORT}"
+        aeocha.expect_http_get_body_eq(fw, "${base}/add/2/3", "5", "GET /add/2/3 == 5")
+        aeocha.expect_http_get_body_contains(fw, "${base}/info", "demo",
+            "GET /info body has demo")
+        aeocha.expect_http_get_status(fw, "${base}/missing", 404, "GET /missing is 404")
+        println("  ✓ all 3 GET-and-assert matchers ran against tape")
+
         vcr.eject(srv)
     }
 }

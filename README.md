@@ -53,6 +53,9 @@ Run with `ae run my_test.ae`. Exit code `0` on success, `1` on failure.
 | `before_each() callback { … }` | Setup hook. |
 | `after_each() callback { … }` | Teardown hook. |
 | `assert_eq(fw, a, b, msg)` | Equality check. |
+| `expect_http_get_status(fw, url, status, msg)` | GET `url`; assert transport ok + status. One line, no `resp` lifecycle. |
+| `expect_http_get_body_eq(fw, url, want, msg)` | GET `url`; assert 200 + body **exactly** `want`. |
+| `expect_http_get_body_contains(fw, url, needle, msg)` | GET `url`; assert 200 + body contains `needle`. |
 | `run_summary(fw)` | Report and exit. |
 
 ## License

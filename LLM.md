@@ -8,7 +8,7 @@ Aeocha is a BDD-style test framework for Aether, featuring `describe`, `it`, `be
 ## Development Principles
 - **BDD Syntax**: Follow the `describe` and `it` pattern.
 - **Framework Context**: The `fw` context is threaded through most calls because Aether rejects mutable module-level identifiers.
-- **Integration Matchers**: Maintain the `expect_*` matchers for process and HTTP testing. These are designed to be high-level and reduce boilerplate in integration tests.
+- **Integration Matchers**: Maintain the `expect_*` matchers for process and HTTP testing. These are designed to be high-level and reduce boilerplate in integration tests. Two HTTP layers exist: *low-level* (`expect_http_status`, `expect_http_body_eq`, `expect_http_body_contains`, `expect_http_header`, `expect_http_body_json_field`) take a `resp` the caller builds/frees; *high-level* (`expect_http_get_status`, `expect_http_get_body_eq`, `expect_http_get_body_contains`) do the GET + request/free lifecycle themselves so a test asserts a response in one line. The high-level ones reuse the low-level ones internally. Note `send_request` already frees `resp` and returns null on transport error — the error branch must NOT `response_free`.
 - **IPC Reporting**: `run_summary` emits a structured v1 report if it detects a parent IPC channel (e.g., when run by `aeb`).
 
 ## Building / Testing
