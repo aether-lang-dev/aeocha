@@ -9,6 +9,7 @@ Aeocha is a BDD-style test framework for Aether, featuring `describe`, `it`, `be
 - **BDD Syntax**: Follow the `describe` and `it` pattern.
 - **Framework Context**: The `fw` context is threaded through most calls because Aether rejects mutable module-level identifiers.
 - **Integration Matchers**: Maintain the `expect_*` matchers for process and HTTP testing. These are designed to be high-level and reduce boilerplate in integration tests. Two HTTP layers exist: *low-level* (`expect_http_status`, `expect_http_body_eq`, `expect_http_body_contains`, `expect_http_header`, `expect_http_body_json_field`) take a `resp` the caller builds/frees; *high-level* (`expect_http_get_status`, `expect_http_get_body_eq`, `expect_http_get_body_contains`) do the GET + request/free lifecycle themselves so a test asserts a response in one line. The high-level ones reuse the low-level ones internally. Note `send_request` already frees `resp` and returns null on transport error — the error branch must NOT `response_free`.
+- **No upward deps in tests**: Aeocha is the lowest-level test framework in the stack — its own tests must not depend on downstream projects. The HTTP-matcher probe uses a plain in-process `std.http` server (hand-rolled routes), NOT `servirtium-vcr` (VCR moved out of the aether stdlib into the standalone `servirtium-vcr` project, imported as `core.vcr`; don't reintroduce `std.http.server.vcr`).
 - **IPC Reporting**: `run_summary` emits a structured v1 report if it detects a parent IPC channel (e.g., when run by `aeb`).
 
 ## Building / Testing
@@ -27,4 +28,5 @@ Aeocha is a BDD-style test framework for Aether, featuring `describe`, `it`, `be
 ## Idioms that keep biting
 - **Trailing Blocks**: Use the trailing block pattern for `describe`.
 - **Closure Capturing**: Be mindful of closure capturing rules in Aether when using hooks.
+- **Detached server hangs the process**: A test that spins up an in-process `std.http` server runs it on a detached actor thread that never returns. `run_summary` only `exit(1)`s on failure, so on success the process hangs holding its port — next run fails to bind. End `main()` with an explicit `exit(0)`.
 
