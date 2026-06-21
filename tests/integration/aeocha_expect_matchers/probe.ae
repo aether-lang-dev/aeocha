@@ -6,15 +6,17 @@
 //      /bin/sh -c. POSIX-only; skip on Windows where os.run_capture
 //      uses POSIX-fallback shims.
 //
-//   2. HTTP matchers — happy path against an in-process VCR-loaded
-//      server. Tape (expect_matchers.tape) holds one interaction
-//      with status / headers / JSON body matched by every HTTP
-//      matcher in turn.
+//   2. HTTP matchers — happy path against a plain in-process
+//      std.http server with three hand-rolled routes (/info,
+//      /add/2/3, /missing). Aeocha is the lowest-level framework in
+//      the stack, so its own tests deliberately do NOT depend on the
+//      downstream servirtium-vcr record/replay project just to get a
+//      server — std.http (already needed for the matchers) is enough.
 //
 // The test calls the matchers from main()'s scope rather than
 // wrapping them in `aeocha.describe / it` blocks. Reason:
 // `it()`-callback closures don't currently capture top-level
-// `const` or top-level actor types — the VCR section needs both —
+// `const` or top-level actor types — the HTTP section needs both —
 // and the porter's actual tests use the closure shape against
 // values declared inside the closure body anyway. The framework's
 // init / fail / run_summary surface still exercises end-to-end;
@@ -27,7 +29,6 @@
 // porter's actual data shapes.
 
 import aeocha
-import std.http.server.vcr
 import std.http
 import std.http.client
 import std.os
@@ -42,17 +43,49 @@ extern http_server_start_raw(server: ptr) -> int
 
 const PORT = 18130
 
-message StartVCR { raw: ptr }
+// Fixture HTTP server — a plain std.http server with three hand-rolled
+// routes. Aeocha is the *lowest-level* test framework in the stack, so
+// its own tests must not depend on a downstream record/replay project
+// (servirtium-vcr) just to get a server to assert against. std.http is
+// already imported for the response accessors the matchers use, so the
+// in-process server costs nothing extra and keeps this test
+// self-contained.
+//
+// Routes mirror what the HTTP matchers need to exercise:
+//   GET /info     -> 200, JSON body + X-Node-Hash header
+//   GET /add/2/3  -> 200, body exactly "5"  (the body_eq vs _contains case)
+//   GET /missing  -> 404                     (the non-200 status case)
+
+message StartSrv { raw: ptr }
 message Noop {}
 
-actor VCRActor {
+actor SrvActor {
     state s = 0
-    receive { StartVCR(raw) -> { s = raw; http_server_start_raw(raw) } }
+    receive { StartSrv(raw) -> { s = raw; http_server_start_raw(raw) } }
 }
 
 actor SchedHelper {
     state x = 0
     receive { Noop() -> { x = 1 } }
+}
+
+handle_info(req: ptr, res: ptr, ud: ptr) {
+    http.response_set_status(res, 200)
+    http.response_set_header(res, "Content-Type", "application/json")
+    http.response_set_header(res, "X-Node-Hash", "abc123")
+    http.response_set_body(res, "{\"head\":\"3\",\"name\":\"demo\"}")
+}
+
+handle_add(req: ptr, res: ptr, ud: ptr) {
+    http.response_set_status(res, 200)
+    http.response_set_header(res, "Content-Type", "text/plain")
+    http.response_set_body(res, "5")
+}
+
+handle_missing(req: ptr, res: ptr, ud: ptr) {
+    http.response_set_status(res, 404)
+    http.response_set_header(res, "Content-Type", "text/plain")
+    http.response_set_body(res, "not found")
 }
 
 run_process_section(fw: ptr) {
@@ -118,19 +151,22 @@ run_process_section(fw: ptr) {
 run_http_section(fw: ptr) {
     println("\n=== expect_* — HTTP matchers ===\n")
 
-    tape = "tests/integration/aeocha_expect_matchers/expect_matchers.tape"
-    srv = vcr.load(tape, PORT)
-    if srv == null {
+    srv = http.server_create(PORT)
+    if srv == 0 {
         // Bare `return` from a non-void function is rejected by
         // Apple Clang (non-void here because Aether codegen
         // defaults missing return types to int). Use if/else
         // nesting instead of early-return to keep the function
         // single-exit.
-        aeocha.fail(fw, "vcr.load returned null — tape not found?")
+        aeocha.fail(fw, "server_create returned 0 — port ${PORT} busy?")
     } else {
+        http.server_get(srv, "/info", handle_info, 0)
+        http.server_get(srv, "/add/2/3", handle_add, 0)
+        http.server_get(srv, "/missing", handle_missing, 0)
+
         spawn(SchedHelper())
-        a = spawn(VCRActor())
-        a ! StartVCR { raw: srv }
+        a = spawn(SrvActor())
+        a ! StartSrv { raw: srv }
         sleep(500)
 
         url = "http://127.0.0.1:${PORT}/info"
@@ -149,8 +185,8 @@ run_http_section(fw: ptr) {
             // /add/2/3 below proves the GET-level twin; this proves the
             // low-level sibling of expect_http_body_contains.
             aeocha.expect_http_body_eq(fw, resp, "{\"head\":\"3\",\"name\":\"demo\"}",
-                "exact body equals tape")
-            println("  ✓ all 6 low-level HTTP matchers ran against tape")
+                "exact body equals fixture")
+            println("  ✓ all 6 low-level HTTP matchers ran against fixture server")
             client.response_free(resp)
         }
 
@@ -163,9 +199,10 @@ run_http_section(fw: ptr) {
         aeocha.expect_http_get_body_contains(fw, "${base}/info", "demo",
             "GET /info body has demo")
         aeocha.expect_http_get_status(fw, "${base}/missing", 404, "GET /missing is 404")
-        println("  ✓ all 3 GET-and-assert matchers ran against tape")
+        println("  ✓ all 3 GET-and-assert matchers ran against fixture server")
 
-        vcr.eject(srv)
+        // No teardown handle needed — the server runs on a detached
+        // actor thread and the process exits at the end of main().
     }
 }
 
@@ -183,4 +220,9 @@ main() {
     run_process_section(fw)
     run_http_section(fw)
     aeocha.run_summary(fw)
+    // The fixture server runs on a detached actor thread that never
+    // returns, so without an explicit exit the process would hang —
+    // holding port 18130 and making the next run fail to bind.
+    // run_summary already exit(1)s on failure; force a clean 0 here.
+    exit(0)
 }

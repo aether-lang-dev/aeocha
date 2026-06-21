@@ -2,7 +2,7 @@
 # Smoke test for the expect_* integration-shape matchers in
 # aeocha (#aeocha-integration-helpers ask). Exercises both
 # the process and HTTP halves end-to-end against real subprocesses
-# and a VCR-loaded in-process server.
+# and a plain in-process std.http fixture server.
 #
 # Skips on Windows — os.run_capture is POSIX-only there, and the
 # test depends on /bin/echo and /bin/sh.
@@ -29,20 +29,12 @@ fi
 tmpdir="$(mktemp -d)"
 trap 'rm -rf "$tmpdir"' EXIT
 
-# Run from repo root so the tape path inside probe.ae resolves.
-# The probe.ae itself signals failure via aeocha.run_summary →
-# exit(1), so the shell test just observes the exit code.
+# Run from repo root so AETHER_INCLUDE_PATH picks up the local
+# aeocha.ae. The probe.ae itself signals failure via
+# aeocha.run_summary → exit(1), so the shell test just observes the
+# exit code.
 cd "$ROOT" || exit 1
 if ! AETHER_INCLUDE_PATH="$ROOT" "$AE" run "$SCRIPT_DIR/probe.ae" >"$tmpdir/out.log" 2>&1; then
-    # The HTTP section depends on std.http.server.vcr, whose C companion
-    # (aether_vcr.c) is not linked by some installed `ae` packagings —
-    # the link fails with "undefined reference to `vcr_*`". That's an
-    # environment/runtime break, not an aeocha regression, so skip rather
-    # than fail when we see it (mirrors the other prereq skips above).
-    if grep -q "undefined reference to .vcr_" "$tmpdir/out.log"; then
-        echo "  [SKIP] aeocha_expect_matchers: installed ae does not link std.http.server.vcr"
-        exit 0
-    fi
     echo "  [FAIL] aeocha_expect_matchers"
     tail -30 "$tmpdir/out.log"
     exit 1
