@@ -52,7 +52,9 @@ Run with `ae run my_test.ae`. Exit code `0` on success, `1` on failure.
 | `it(name) callback { … }` | Define a test case. |
 | `before_each() callback { … }` | Setup hook. |
 | `after_each() callback { … }` | Teardown hook. |
-| `assert_eq(fw, a, b, msg)` | Equality check. |
+| `assert_eq(fw, a, b, msg)` | Equality check (flat style). |
+| `expect_int(x).to_equal(5).to_be_gt(0)` | Fluent assertion chain (subject-first; no `fw` in the chain). Int matchers: `to_equal`, `to_be_gt`, `to_be_lt`, `to_be_truthy`, `to_be_falsy`, `not_()`. |
+| `expect_str(s).to_contain("x").to_start_with("y")` | Fluent string chain: `to_equal_str`, `to_contain`, `to_start_with`. |
 | `expect_stdout_matches_regex(fw, out, pattern, msg)` | A stdout line matches a PCRE2 regex (per-line, unanchored). |
 | `expect_stderr_contains(fw, err, needle, msg)` | Captured child stderr (from `os.run_full`) contains `needle`. |
 | `expect_stderr_empty(fw, err, msg)` | Child wrote nothing to stderr. |

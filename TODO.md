@@ -6,33 +6,25 @@
 
 3b. **Consider taking Aeocha back to the Aether repo and bundling.** Aeocha is a single self-contained file (`aeocha.ae`) with no `contrib` deps, no raw externs, and only `std.*` imports — a plain assertion test builds to a libc-only binary (verified via `ldd`). That makes it a natural candidate to live in-tree (e.g. `contrib/aeocha/` again) and ship with the compiler so downstream Aether projects get it without copying the file onto their include path. Tradeoff: independent release cadence + the "no upward deps in tests" boundary are easier to keep when it's a standalone repo; bundling couples Aeocha's version to the compiler's. Decide which matters more before moving.
 
-3c. **Fluent assertion facade** (BLOCKED — see below; do NOT re-attempt yet).
-The intended grammar: `expect_int(x).to_equal(5).to_be_gt(0)`,
-`expect_str(name).to_contain("foo")`, `expect_int(x).not_().to_equal(5)` —
-subject-first, chainable, alongside the flat matchers. Each `expect_*` returns a
-small subject record (value + negated flag); `.to_*` reads it and reports via
-`fail` against an ambient `fw`. Design fully prototyped and it reads beautifully.
+3c. **[DONE — ae 0.328]** Fluent assertion facade. Subject-first, chainable,
+alongside the flat matchers: `expect_int(x).to_equal(5).to_be_gt(0)`,
+`expect_str(name).to_contain("foo")`, `expect_int(x).not_().to_equal(5)`. Each
+`expect_*` returns a small subject record (value + negated flag); `.to_*` reads it
+and reports via `fail` against the ambient `current_fw` cell. Shipped in
+`aeocha.ae`; covered in example_self_test.ae; fail paths verified out-of-suite.
 
-**Blocker status (updated on ae 0.327.0):**
-  1. *Cross-module UFCS* — **FIXED in 0.327** (aether #934, closed). `b.bump()` on
-     an imported method now resolves (verified). This was the original blocker.
-  2. *Module-level `var` across imports* — **NOW THE BLOCKER** (aether **#937**,
-     open). The ambient-`fw` design needs a module `var current_fw` in `aeocha.ae`,
-     set by `init()` and read by the chained matchers. But a module `var` is NOT
-     shared across the import boundary on 0.327: a write is visible inside the
-     writing fn yet a later call reads back the initializer (`setc(7)` then
-     `getc() == 0` from a consumer; single-file gives `7`). So the matchers would
-     read `current_fw == null` and deref null on the first failure. This is what
-     actually sank the facade on 0.327 (not UFCS, which now works) — and it
-     re-explains the 0.325 segfault: same null-ambient-cell failure, just reached
-     via the then-also-broken UFCS path.
+  History (both blockers cleared upstream):
+  - Cross-module UFCS — fixed 0.327 (aether #934).
+  - Module-`var` shared across imports — fixed 0.328 (aether #937). Until this, the
+    ambient `current_fw` read back null in a consumer; this (not UFCS) is what sank
+    the facade on 0.325/0.327, and re-explains the 0.325 segfault.
+  Footgun that cost real time: a missing `exports (...)` line makes a module's UFCS
+  methods invisible cross-module (cascades as "Undefined function 'x.foo'"); and the
+  happy path never reads `current_fw`, so STALE-CACHE happy-green ghosts masked a
+  broken ambient cell. Always `rm -rf ~/.aether/cache` and test a FAIL path.
 
-Do NOT re-attempt until #937 lands. When it does, the facade is a near-drop-in:
-the design is fully prototyped (subject struct + UFCS `.to_*` + `not_()`), reads
-beautifully, and cross-module UFCS already works. Watch for STALE-CACHE GHOSTS
-when re-testing — always `rm -rf ~/.aether/cache` and test the FAIL path first
-(the happy path doesn't read `current_fw`, so it masks a null ambient cell).
-Combine with 4f for `within(5s).expect(resp).status(200)`.
+  Still open: combine with 4f for `within(5s).expect(resp).status(200)`; add a
+  string `not_()` and `expect_ptr` if downstream tests want them.
 
 ## Timing & Duration (leveraging the first-class `Duration` type)
 
