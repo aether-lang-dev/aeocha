@@ -53,6 +53,10 @@ Run with `ae run my_test.ae`. Exit code `0` on success, `1` on failure.
 | `before_each() callback { … }` | Setup hook. |
 | `after_each() callback { … }` | Teardown hook. |
 | `assert_eq(fw, a, b, msg)` | Equality check. |
+| `expect_stdout_matches_regex(fw, out, pattern, msg)` | A stdout line matches a PCRE2 regex (per-line, unanchored). |
+| `expect_stderr_contains(fw, err, needle, msg)` | Captured child stderr (from `os.run_full`) contains `needle`. |
+| `expect_stderr_empty(fw, err, msg)` | Child wrote nothing to stderr. |
+| `expect_elapsed_under(fw, elapsed_ns, budget, msg)` | A caller-measured monotonic-ns span is under a `Duration` budget (e.g. `50ms`). |
 | `expect_http_get_status(fw, url, status, msg)` | GET `url`; assert transport ok + status. One line, no `resp` lifecycle. |
 | `expect_http_get_body_eq(fw, url, want, msg)` | GET `url`; assert 200 + body **exactly** `want`. |
 | `expect_http_get_body_contains(fw, url, needle, msg)` | GET `url`; assert 200 + body contains `needle`. |

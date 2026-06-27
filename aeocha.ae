@@ -47,6 +47,8 @@ import std.string
 import std.strbuilder
 import std.http
 import std.http.client
+import std.os
+import std.regex
 import std.ipc
 import std.net
 
@@ -58,14 +60,18 @@ exports (
     assert_eq, assert_str_eq, assert_not_eq, assert_gt,
     assert_contains, assert_null, assert_not_null,
     // Integration-shape matchers — process surface
-    // (expect_stderr_* deferred; see comment near expect_stdout_line_count
-    //  for why os.run_capture stderr capture must land first.)
     expect_exit, expect_no_spawn_error,
     expect_stdout_contains,
     expect_stdout_line_field,
     expect_stdout_line_after,
     expect_stdout_line_count,
     expect_stdout_matches,
+    expect_stdout_matches_regex,
+    // Child stderr matchers (consume os.run_full's 2nd slot)
+    expect_stderr_contains, expect_stderr_empty,
+    // Timing-budget matcher (caller-measured monotonic-ns span vs a
+    // Duration literal)
+    expect_elapsed_under,
     // Integration-shape matchers — HTTP surface (low-level: caller
     // owns the resp lifecycle)
     expect_http_status, expect_http_no_error,
@@ -77,15 +83,6 @@ exports (
     expect_http_get_body_eq, expect_http_get_body_contains,
     run_summary
 )
-
-// Case-insensitive per-header lookup on a client HttpResponse.
-// Defined in the runtime's std/net/aether_http.c (linked in via the
-// `import std.net` above); the std.http module.ae doesn't surface a
-// wrapper, so expect_http_header binds the C symbol directly. Returns
-// "" when the header is absent; the pointer is borrowed (per-response
-// thread-local), valid until the next call — fine for the immediate
-// compare expect_http_header does.
-extern http_response_header_raw(resp: ptr, name: string) -> string
 
 // ---------------------------------------------------------------------------
 // Framework context — counters and depth, threaded through every call
@@ -112,11 +109,14 @@ init() -> ptr {
     // "current_it" stores the in-flight it-record map directly (or null
     // when no it() is running) — bypasses ref cells because ref_get
     // truncates pointers to 32 bits in codegen. "t_start_ns_str" is a
-    // decimal-string of the wall-clock start so we keep all 64 bits;
-    // parsed back via string.get_long in run_summary.
+    // decimal-string of the monotonic-clock start so we keep all 64
+    // bits; parsed back via string.get_long in run_summary. Monotonic
+    // (os.now_monotonic_ns), not wall-clock (clock_ns): the run-total
+    // duration is a delta, and a wall-clock jump (NTP step, DST) mid-run
+    // would otherwise corrupt it. Only deltas are meaningful here.
     map.put_raw(fw, "its", list.new())
     map.put_raw(fw, "current_it", null)
-    map.put_raw(fw, "t_start_ns_str", "${clock_ns()}")
+    map.put_raw(fw, "t_start_ns_str", "${os.now_monotonic_ns()}")
     return fw
 }
 
@@ -246,10 +246,12 @@ it(_ctx: ptr, description: string, test_fn: fn) {
     its_list = map.get_raw(fw, "its")
     map.put_raw(fw, "current_it", it_rec)
 
-    t_start_ns = clock_ns()
+    // Monotonic clock for the elapsed span — only the delta matters,
+    // and clock_ns() (wall clock) could jump under NTP/DST mid-test.
+    t_start_ns = os.now_monotonic_ns()
     old_failed = ref_get(failed_ref)
     call(test_fn)
-    t_end_ns = clock_ns()
+    t_end_ns = os.now_monotonic_ns()
 
     // Tear down "current" pointer before any after-hooks so a hook
     // failure doesn't get mis-attributed to this it's record.
@@ -418,20 +420,35 @@ expect_stdout_contains(fw: ptr, out: string, needle: string, msg: string) {
     }
 }
 
-// NOTE: expect_stderr_contains / expect_stderr_empty deferred —
-// `os.run_capture`'s third return slot is the spawn-error string,
-// NOT the child's captured stderr. fd 2 from the child currently
-// passes through to the parent's stderr unchanged. Adding child-
-// stderr capture is a stdlib-side change (new pipe, second drain
-// loop in std/os/aether_os.c) tracked separately. Once that lands,
-// these matchers become trivial: same shape as
-// expect_stdout_contains, just consuming the new 4th tuple slot.
-// The porter spec calls for them but the underlying capture isn't
-// there yet — so callers that need stderr today should use
-// `os.run_capture` with `2>&1` redirection inside a /bin/sh -c
-// wrapper for now, then use `expect_stdout_contains` on the merged
-// stream. See the porter's aeocha-integration-helpers spec for the
-// intended shape once stderr capture lands.
+// Child stderr matchers. The stderr capture these need now exists:
+// `os.run_full(prog, argv, env, stdin) -> (stdout, stderr, exit, err)`
+// captures the child's two streams SEPARATELY (no pipe-buffer
+// deadlock), unlike `os.run_capture` whose third slot is the
+// spawn-error string, not child stderr. Callers feed the 2nd tuple
+// slot to these matchers:
+//   out, err, exit, spawn_err = os.run_full(prog, argv, null, "")
+//   aeocha.expect_no_spawn_error(fw, spawn_err, "started")
+//   aeocha.expect_stderr_contains(fw, err, "deprecated", "warned")
+// (param `err` is the captured child stderr stream — distinct from
+// the spawn-error slot that expect_no_spawn_error consumes.)
+
+// expect_stderr_contains(fw, err, needle, msg) — captured child
+// stderr has the substring somewhere. The stderr twin of
+// expect_stdout_contains; consumes os.run_full's 2nd slot.
+expect_stderr_contains(fw: ptr, err: string, needle: string, msg: string) {
+    if string.contains(err, needle) == 0 {
+        fail(fw, "${msg} — stderr does not contain '${needle}'")
+    }
+}
+
+// expect_stderr_empty(fw, err, msg) — child wrote nothing to stderr.
+// Asserts a clean run with no warnings/diagnostics on fd 2. Consumes
+// os.run_full's 2nd slot.
+expect_stderr_empty(fw: ptr, err: string, msg: string) {
+    if string.equals(err, "") == 0 {
+        fail(fw, "${msg} — stderr not empty: '${err}'")
+    }
+}
 
 // expect_stdout_line_count(fw, out, want, msg) — stdout has
 // exactly `want` newline-separated lines. Trailing-newline aware:
@@ -640,6 +657,86 @@ expect_stdout_matches(fw: ptr, out: string, pattern: string, msg: string) {
     }
 }
 
+// expect_stdout_matches_regex(fw, out, pattern, msg) — at least one
+// stdout line matches a PCRE2 regular expression. The richer sibling
+// of expect_stdout_matches (which is glob-only): full regex via
+// std.regex — captures, anchors, alternation, character classes,
+// quantifiers. The pattern is UNANCHORED, so it matches anywhere in a
+// line (use `^`/`$` to anchor). Tested per-line, so `^Revision: \d+$`
+// asserts a whole-line shape without the trailing-newline split issue.
+//
+// std.regex is built against libpcre2-8. If the runtime was built
+// WITHOUT it, every regex entry point returns a clean diagnostic
+// rather than crashing — matches_lit surfaces it in the error slot.
+// We treat a non-empty error slot as a matcher failure (bad pattern OR
+// missing libpcre2) and report it, so a missing-lib environment fails
+// loudly instead of silently passing. Reach for expect_stdout_matches
+// (glob) if you must run where libpcre2 may be absent.
+expect_stdout_matches_regex(fw: ptr, out: string, pattern: string, msg: string) {
+    lines = string.split(out, "\n")
+    line_count = string.array_size(lines)
+    found = 0
+    rerr = ""
+    i = 0
+    while i < line_count {
+        line_ptr = string.array_get(lines, i)
+        ok, err = regex.matches_lit(pattern, line_ptr)
+        if string.equals(err, "") == 0 {
+            // Compile/engine error (bad pattern or no libpcre2) — same
+            // for every line, so capture once and stop.
+            rerr = err
+            i = line_count
+        } else {
+            if ok == 1 {
+                found = 1
+                i = line_count
+            } else {
+                i = i + 1
+            }
+        }
+    }
+    string.array_free(lines)
+    if string.equals(rerr, "") == 0 {
+        fail(fw, "${msg} — regex '${pattern}' error: ${rerr}")
+    } else {
+        if found == 0 {
+            fail(fw, "${msg} — no stdout line matches regex '${pattern}'")
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Timing-budget matcher
+//
+// expect_elapsed_under(fw, elapsed_ns, budget, msg) — a measured span
+// is under a budget written as a Duration literal. The caller measures
+// the span itself with two monotonic-clock reads:
+//
+//     t0 = os.now_monotonic_ns()
+//     ... do work ...
+//     elapsed = os.now_monotonic_ns() - t0
+//     aeocha.expect_elapsed_under(fw, elapsed, 50ms, "fast path")
+//
+// `elapsed_ns` is a plain int64 nanosecond count (what monotonic-ns
+// deltas yield); `budget` is a Duration (`50ms`, `2s`, `200us`). We
+// compare in ns via budget.ns — Duration-vs-plain-number is a type
+// error in Aether, so the .ns accessor is the bridge. Use monotonic
+// (not wall-clock) deltas: only the delta is meaningful and a wall
+// jump would corrupt it.
+//
+// NOTE on messages: a bare `${budget}` is NOT used — Duration
+// interpolation is broken on the current compiler (renders every
+// value as "10ns"). The .ms accessor interpolates correctly, so the
+// message reports ms on both sides.
+expect_elapsed_under(fw: ptr, elapsed_ns: long, budget: Duration, msg: string) {
+    if elapsed_ns < budget.ns {
+        // under budget — pass (no-op)
+    } else {
+        elapsed_ms = elapsed_ns / 1000000
+        fail(fw, "${msg} — took ${elapsed_ms}ms, budget ${budget.ms}ms")
+    }
+}
+
 // expect_http_status(fw, resp, want, msg) — response has the
 // expected HTTP status code. Works for v1 (`http.get(url)`) and v2
 // (`client.send_request(req)`) responses interchangeably.
@@ -706,12 +803,18 @@ expect_http_body_eq(fw: ptr, resp: ptr, want: string, msg: string) {
 // expect_http_header(fw, resp, name, want, msg) — case-insensitive
 // header equality. The header NAME is matched case-insensitively (per
 // RFC 7230); the VALUE is compared exactly. Multiple values for the
-// same header arrive joined with ", " from the runtime accessor.
+// same header arrive joined with ", " from the stdlib accessor.
+//
+// Uses the std.http.client wrapper rather than binding the C extern
+// directly: the wrapper snapshots the borrowed thread-local buffer via
+// string.copy (closes upstream #269), so the returned value is owned
+// and can't be clobbered by a later call. Binding the raw extern here
+// would re-inherit that aliasing footgun.
 expect_http_header(fw: ptr, resp: ptr, name: string, want: string, msg: string) {
     if resp == 0 {
         fail(fw, "${msg} — null response")
     } else {
-        actual = http_response_header_raw(resp, name)
+        actual = client.response_header(resp, name)
         if string.equals(actual, want) == 0 {
             fail(fw, "${msg} — header '${name}' expected '${want}', got '${actual}'")
         }
@@ -885,7 +988,9 @@ _format_aeb_report(fw: ptr, passed: int, failed: int) -> string {
     n = list.size(its)
     t_start_str = map.get_raw(fw, "t_start_ns_str")
     t_start_ns = string.get_long(t_start_str)
-    total_duration_ms = (clock_ns() - t_start_ns) / 1000000
+    // Monotonic end to match the monotonic start stamped in init() —
+    // mixing the two clocks would yield a garbage delta.
+    total_duration_ms = (os.now_monotonic_ns() - t_start_ns) / 1000000
 
     // Header KV block. Numbers fold via string interpolation —
     // ${x} is the same path the existing aeocha print() calls
