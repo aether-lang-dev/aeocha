@@ -6,17 +6,31 @@
 
 3b. **Consider taking Aeocha back to the Aether repo and bundling.** Aeocha is a single self-contained file (`aeocha.ae`) with no `contrib` deps, no raw externs, and only `std.*` imports — a plain assertion test builds to a libc-only binary (verified via `ldd`). That makes it a natural candidate to live in-tree (e.g. `contrib/aeocha/` again) and ship with the compiler so downstream Aether projects get it without copying the file onto their include path. Tradeoff: independent release cadence + the "no upward deps in tests" boundary are easier to keep when it's a standalone repo; bundling couples Aeocha's version to the compiler's. Decide which matters more before moving.
 
-3c. **Fluent assertion facade** (UNBLOCKED — needs 3a first). Now that
-method-call-on-value / UFCS works (aether #928, landed 0.325.0:
-`expect(5).to_equal(5).to_equal(6)` compiles & runs), Aeocha can offer the
-fluent BDD grammar Fowler-style alongside the flat `assert_*` / `expect_*`
-matchers: `expect(x).to_equal(5)`, `expect(name).to_contain("foo")`,
-`expect(x).not_().to_equal(5)`. Each `expect(...)` returns a small subject record
-(subject value + negated flag); `.to_*` reads it and reports via `fail`. The flat
-matchers stay as the primitive layer the facade delegates to. **Blocked on 3a:**
-without ambient `fw`, the chain has to start `expect(fw, x)`, which is uglier than
-the flat form — the whole point of fluency evaporates. With ambient `fw` it reads
-clean. Combine with 4f for `within(5s).expect(resp).status(200)`.
+3c. **Fluent assertion facade** (BLOCKED — see below; do NOT re-attempt yet).
+The intended grammar: `expect_int(x).to_equal(5).to_be_gt(0)`,
+`expect_str(name).to_contain("foo")`, `expect_int(x).not_().to_equal(5)` —
+subject-first, chainable, alongside the flat matchers. Each `expect_*` returns a
+small subject record (value + negated flag); `.to_*` reads it and reports via
+`fail` against an ambient `fw`. Design fully prototyped and it reads beautifully.
+
+**Blocked on TWO things, in order:**
+  1. *Cross-module UFCS.* The facade was built and integrated — then found
+     non-functional: **UFCS resolves only same-compilation-unit functions, not
+     imported/exported ones** (ae 0.325.0). `b.bump()` works when `bump` is in the
+     same file; across `import` it's `Undefined function 'b.bump'` (the normal
+     qualified call `mod.bump(b)` works fine — only the UFCS-dot rewrite skips
+     imported modules). Since the `.to_*` methods live in `aeocha.ae` and are
+     called from the user's file, the chain can't resolve. The same-file #928
+     repros never caught this. Filed as a follow-up on aether **#928**. The 17/13
+     "passing" greens seen during integration were STALE-CACHE GHOSTS — the real
+     clean-cache result is a compile error / segfault on the fail path.
+  2. *Ambient `fw` (3a).* Even once cross-module UFCS lands, without ambient `fw`
+     the chain must start `expect(fw, x)`, which defeats the point. The ambient
+     cell prototype itself works (a module `var current_fw: ptr` set by init() and
+     read by the matchers) — that part is fine; it's the UFCS boundary that kills it.
+
+Revert was clean (facade was uncommitted). Combine with 4f for
+`within(5s).expect(resp).status(200)` once both blockers clear.
 
 ## Timing & Duration (leveraging the first-class `Duration` type)
 
