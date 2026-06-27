@@ -59,7 +59,8 @@ Run with `ae run my_test.ae`. Exit code `0` on success, `1` on failure.
 | `expect_stderr_contains(fw, err, needle, msg)` | Captured child stderr (from `os.run_full`) contains `needle`. |
 | `expect_stderr_empty(fw, err, msg)` | Child wrote nothing to stderr. |
 | `expect_elapsed_under(fw, elapsed_ns, budget, msg)` | A caller-measured monotonic-ns span is under a `Duration` budget (e.g. `50ms`). |
-| `expect_http_get_status(fw, url, status, msg)` | GET `url`; assert transport ok + status. One line, no `resp` lifecycle. |
+| `within(5s)` / `without(5s)` | Floating modifier: make the **next** GET matcher retry until it passes (`within`) or stops passing (`without`), up to the budget, then auto-revert. `within_poll`/`without_poll` set the poll interval. |
+| `expect_http_get_status(fw, url, status, msg)` | GET `url`; assert transport ok + status. One line, no `resp` lifecycle. Honours a preceding `within`/`without`. |
 | `expect_http_get_body_eq(fw, url, want, msg)` | GET `url`; assert 200 + body **exactly** `want`. |
 | `expect_http_get_body_contains(fw, url, needle, msg)` | GET `url`; assert 200 + body contains `needle`. |
 | `run_summary(fw)` | Report and exit. |

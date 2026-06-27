@@ -69,8 +69,26 @@ sleeping `poll` between attempts. Turns flaky async waits (the HTTP fixture's ba
 `_format_aeb_report` instead of flattening to ms early, and format (`µs`/`ms`/`s`)
 only at the print boundary — fast tests currently all round to `0` ms.
 
-4f. **`within(budget)` / `without(budget)` — the "floating modifier" pattern** —
-from FluentSelenium (Paul's own lib): `within(5s)` floats in front of the *next*
+4f. **[DONE — ae 0.328]** `within(budget)` / `without(budget)` — the "floating
+modifier" pattern, shipped. `within(5s)` sets an ambient budget the next
+`expect_http_get_*` matcher polls against (poll-until-pass); `without(5s)` is
+poll-until-absent; `within_poll`/`without_poll` set the interval. One-shot and
+auto-reverting; no budget → single-shot as before. Implemented via module-`var`
+budget cells + an internal silent probe (`_http_get_probe`) the retry driver loops
+— the public matchers never expose the loop. Verified end-to-end: `within(5s)`
+waits for a late-binding HTTP server with NO pre-sleep (✓), a one-shot GET to a
+dead port fails fast, and `within(800ms)` polls the full budget (~805ms) then
+fails. The probe's HTTP section now uses `within(5s)` for readiness instead of the
+old `sleep(500)` magic number. Gives `within(5s).expect_http_get_status(...)` — the
+FluentSelenium combo.
+
+  Scope note: retry is baked into the GET matchers, NOT a generic
+  `eventually(predicate)` — passing a bare top-level `fn` across a module boundary
+  is broken on 0.328 (`_aether_bare_adapter_X undeclared`; filed aether **#940**).
+  Add a generic `eventually`/`within().expect_int(...)` once #940 lands.
+
+  DESIGN HISTORY (the "floating modifier" pattern) —
+  from FluentSelenium (Paul's own lib): `within(5s)` floats in front of the *next*
 matcher, makes that one operation poll-until-pass, then evaporates — "if you don't
 do `within` there is no waiting; it doesn't last beyond the operation to its
 right." `without(5s)` is the inverse (poll-until-absent). We call it a *floating
