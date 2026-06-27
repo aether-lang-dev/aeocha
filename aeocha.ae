@@ -81,8 +81,28 @@ exports (
     // the caller — one line per asserted HTTP response)
     expect_http_get_status,
     expect_http_get_body_eq, expect_http_get_body_contains,
+    // Fluent assertion facade — subject-first, chainable (ae 0.328+:
+    // needs cross-module UFCS #934 + module-var-across-import #937, both
+    // fixed). expect_int/expect_str start a chain that reads the
+    // framework from an ambient cell, so no `fw` leaks into the chain.
+    expect_int, expect_str, not_,
+    to_equal, to_be_gt, to_be_lt, to_be_truthy, to_be_falsy,
+    to_equal_str, to_contain, to_start_with,
     run_summary
 )
+
+// Ambient "current framework" cell for the fluent facade. The flat
+// assert_*/expect_* matchers still take `fw` explicitly; the fluent
+// chain (expect_int/expect_str → .to_*) reads it from here instead, so
+// the chain stays subject-first with no `fw` argument leaking into it.
+// init() sets this; a chained matcher reads it to report failures.
+// Declared `ptr` (not an inferred int — aether #929) so the 64-bit
+// pointer survives, and relies on module-var state being shared across
+// the import boundary (aether #937, fixed in 0.328). Single-framework
+// per process: a second init() overwrites it — matching the documented
+// tradeoff for ambient state; the flat matchers remain the way to drive
+// two frameworks at once.
+var current_fw: ptr = null
 
 // ---------------------------------------------------------------------------
 // Framework context — counters and depth, threaded through every call
@@ -117,6 +137,8 @@ init() -> ptr {
     map.put_raw(fw, "its", list.new())
     map.put_raw(fw, "current_it", null)
     map.put_raw(fw, "t_start_ns_str", "${os.now_monotonic_ns()}")
+    // Make this the ambient framework for the fluent facade.
+    current_fw = fw
     return fw
 }
 
@@ -911,6 +933,120 @@ expect_http_get_body_contains(fw: ptr, url: string, needle: string, msg: string)
         expect_http_body_contains(fw, resp, needle, msg)
         client.response_free(resp)
     }
+}
+
+// ---------------------------------------------------------------------------
+// Fluent assertion facade — subject-first, chainable
+//
+// The flat assert_*/expect_* matchers above are the primitive layer and
+// stay as-is. This facade is sugar on top, for tests that prefer the
+// Fowler-style fluent grammar the BDD community popularised:
+//
+//     aeocha.expect_int(count).to_equal(5).to_be_gt(0)
+//     aeocha.expect_str(name).to_contain("foo")
+//     aeocha.expect_int(x).not_().to_equal(5)
+//
+// How it works:
+//   - expect_int(v) / expect_str(v) return a small by-value subject
+//     record (the value + a negated flag).
+//   - each .to_* is a free function whose first parameter is the
+//     subject, so UFCS (aether #934) lets it be called as a method and
+//     return the subject again — that's the chain.
+//   - failures are reported via fail() against the AMBIENT framework
+//     (current_fw, set by init()), so the chain carries no `fw`. This
+//     relies on module-var state crossing the import boundary (#937).
+//   - not_() flips the next matcher's sense by returning a negated copy.
+//
+// Requires ae 0.328+ (both #934 and #937 fixed). Naming mirrors the
+// flat layer's int/string split (assert_eq vs assert_str_eq): int
+// matchers are unsuffixed, string matchers carry a distinguishing name.
+// Aether has no receiver-type overloading, so a single `to_equal` can't
+// serve both int and string subjects — expect_str uses to_equal_str.
+//
+// Single-framework caveat: the facade reads current_fw, so it asserts
+// against whichever framework init()'d last. Fine for the normal
+// one-framework-per-process test; the flat matchers remain the way to
+// drive two frameworks at once.
+// ---------------------------------------------------------------------------
+
+struct IntSubject { value: int, negated: int }
+struct StrSubject { value: string, negated: int }
+
+expect_int(v: int) -> IntSubject { return IntSubject { value: v, negated: 0 } }
+expect_str(v: string) -> StrSubject { return StrSubject { value: v, negated: 0 } }
+
+// not_() — flip the sense of the NEXT matcher in the chain.
+not_(s: IntSubject) -> IntSubject {
+    return IntSubject { value: s.value, negated: 1 }
+}
+
+// _verdict_int(ok) — shared verdict: given whether the positive
+// predicate held, report against the ambient fw honouring the negated
+// flag.
+_verdict_int(s: IntSubject, ok: int, what: string) {
+    if s.negated == 0 {
+        if ok == 0 { fail(current_fw, "expected ${what}") }
+    } else {
+        if ok == 1 { fail(current_fw, "expected NOT ${what}") }
+    }
+}
+
+to_equal(s: IntSubject, want: int) -> IntSubject {
+    ok = 0
+    if s.value == want { ok = 1 }
+    _verdict_int(s, ok, "${want}, got ${s.value}")
+    return s
+}
+
+to_be_gt(s: IntSubject, bound: int) -> IntSubject {
+    ok = 0
+    if s.value > bound { ok = 1 }
+    _verdict_int(s, ok, "> ${bound}, got ${s.value}")
+    return s
+}
+
+to_be_lt(s: IntSubject, bound: int) -> IntSubject {
+    ok = 0
+    if s.value < bound { ok = 1 }
+    _verdict_int(s, ok, "< ${bound}, got ${s.value}")
+    return s
+}
+
+to_be_truthy(s: IntSubject) -> IntSubject {
+    ok = 0
+    if s.value != 0 { ok = 1 }
+    _verdict_int(s, ok, "truthy, got ${s.value}")
+    return s
+}
+
+to_be_falsy(s: IntSubject) -> IntSubject {
+    ok = 0
+    if s.value == 0 { ok = 1 }
+    _verdict_int(s, ok, "falsy, got ${s.value}")
+    return s
+}
+
+// String subject matchers. negated is honoured but there's no string
+// not_() yet — add one if a downstream test needs `.not_().to_contain`.
+to_equal_str(s: StrSubject, want: string) -> StrSubject {
+    if string.equals(s.value, want) == 0 {
+        fail(current_fw, "expected '${want}', got '${s.value}'")
+    }
+    return s
+}
+
+to_contain(s: StrSubject, needle: string) -> StrSubject {
+    if string.contains(s.value, needle) == 0 {
+        fail(current_fw, "'${s.value}' does not contain '${needle}'")
+    }
+    return s
+}
+
+to_start_with(s: StrSubject, prefix: string) -> StrSubject {
+    if string.starts_with(s.value, prefix) == 0 {
+        fail(current_fw, "'${s.value}' does not start with '${prefix}'")
+    }
+    return s
 }
 
 // ---------------------------------------------------------------------------

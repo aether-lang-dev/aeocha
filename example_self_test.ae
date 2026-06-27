@@ -70,6 +70,27 @@ main() {
             }
         }
 
+        aeocha.describe("fluent assertions") {
+            // Subject-first, chainable facade. No `fw` in the chain —
+            // the matchers read the ambient framework set by init().
+            aeocha.it("chains int matchers") callback {
+                aeocha.expect_int(5).to_equal(5).to_be_gt(0).to_be_lt(10)
+            }
+
+            aeocha.it("supports not_() negation") callback {
+                aeocha.expect_int(5).not_().to_equal(6)
+            }
+
+            aeocha.it("int truthiness matchers") callback {
+                aeocha.expect_int(1).to_be_truthy()
+                aeocha.expect_int(0).to_be_falsy()
+            }
+
+            aeocha.it("chains string matchers") callback {
+                aeocha.expect_str("hello world").to_equal_str("hello world").to_contain("world").to_start_with("hello")
+            }
+        }
+
         aeocha.describe("before/after_each hooks") {
             aeocha.before_each() callback {
                 ref_set(hook_counter, ref_get(hook_counter) + 1)
