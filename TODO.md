@@ -6,6 +6,18 @@
 
 3b. **Consider taking Aeocha back to the Aether repo and bundling.** Aeocha is a single self-contained file (`aeocha.ae`) with no `contrib` deps, no raw externs, and only `std.*` imports — a plain assertion test builds to a libc-only binary (verified via `ldd`). That makes it a natural candidate to live in-tree (e.g. `contrib/aeocha/` again) and ship with the compiler so downstream Aether projects get it without copying the file onto their include path. Tradeoff: independent release cadence + the "no upward deps in tests" boundary are easier to keep when it's a standalone repo; bundling couples Aeocha's version to the compiler's. Decide which matters more before moving.
 
+3c. **Fluent assertion facade** (UNBLOCKED — needs 3a first). Now that
+method-call-on-value / UFCS works (aether #928, landed 0.325.0:
+`expect(5).to_equal(5).to_equal(6)` compiles & runs), Aeocha can offer the
+fluent BDD grammar Fowler-style alongside the flat `assert_*` / `expect_*`
+matchers: `expect(x).to_equal(5)`, `expect(name).to_contain("foo")`,
+`expect(x).not_().to_equal(5)`. Each `expect(...)` returns a small subject record
+(subject value + negated flag); `.to_*` reads it and reports via `fail`. The flat
+matchers stay as the primitive layer the facade delegates to. **Blocked on 3a:**
+without ambient `fw`, the chain has to start `expect(fw, x)`, which is uglier than
+the flat form — the whole point of fluency evaporates. With ambient `fw` it reads
+clean. Combine with 4f for `within(5s).expect(resp).status(200)`.
+
 ## Timing & Duration (leveraging the first-class `Duration` type)
 
 Aether has a first-class `Duration` type (issue #524): literals with unit
@@ -13,21 +25,20 @@ suffixes (`10ns`, `50ms`, `2s`, `1h15m`), stored as `int64` ns, with
 `.ns`/`.ms`/`.s` accessors and `dur <op> dur -> bool` comparisons. Comparing a
 `Duration` against a plain number is a deliberate type error. These items use it.
 
-Implementation notes learned while prototyping (ae 0.324.0):
+Implementation notes (verified on ae 0.325.0):
 - `os.now_monotonic_ns()` returns a plain `long` (NTP-jump-free), NOT a `Duration`.
   Keep internal elapsed as plain ns; compare against `budget.ns`.
-- `${duration}` interpolation is currently broken on this build — it renders every
-  Duration as `10ns` regardless of value (the `.ns` accessor and comparisons are
-  fine). Format failure messages via `.ms` / `.ns`, never bare `${dur}`, until the
-  repr path is fixed upstream. (Upstream bug #927.)
-- **Module-scope `var x = 0` infers 32-bit `int`** and silently truncates a 64-bit
-  RHS. A monotonic-ns sum stored in an inferred `var` becomes garbage (verified: a
-  `now + 40_000_000` ns deadline wrapped negative). Any ns-valued ambient/global
-  cell MUST be declared `var x: long = 0`. The inference itself is correct (locals
-  do the same); the real defect is that the `E0200` narrowing guard which *errors*
-  for an equivalent local assignment is NOT applied to the module-global path — so
-  the global truncates silently. Filed upstream as aether **#929**. Distinct from
-  the `ref_get` truncation note in LLM.md — that's a `ref` cell, this is a `var`.
+- `${duration}` interpolation works (largest readable unit: `50ms`, `1.5s`) —
+  **fixed upstream, aether #927 CLOSED.** The earlier "format via `.ms`, never
+  `${dur}`" workaround is no longer needed and has been removed from the code.
+- **Module-scope `var x = 0` infers 32-bit `int`** and a 64-bit RHS now errors with
+  `E0200` (was a *silent* truncation) — **fixed upstream, aether #929 CLOSED.** Still
+  declare ns-valued cells `var x: long = 0`; the difference is the compiler now tells
+  you instead of corrupting silently. Distinct from the `ref_get` truncation note in
+  LLM.md — that's a `ref` cell, this is a `var`.
+- **Method-call-on-value / UFCS works** (`x.f()` desugars to `f(x)`; chains like
+  `expect(5).to_equal(5).to_equal(6)` compile and run) — **landed upstream, aether
+  #928 CLOSED.** This is the substrate for a fluent assertion facade (see 3a/4f).
 
 4a. **[DONE] ns-native per-`it()` timing on the monotonic clock.** Switch the
 per-`it()` duration from wall-clock `clock_ns()` deltas (can jump under NTP) to
@@ -73,7 +84,9 @@ idiomatic-BDD shape. (Implementation term: the ambient cell described below.)
   cell, and FluentSelenium is the existence proof that the "dodgy thread-local"
   approach is ergonomically worth it for a single-threaded-per-case test DSL.
   Sequence: 3a (ambient `fw`) → 4f (`within`/`without` on the same substrate) →
-  optionally fluent chaining once language issue #928 (method-call-on-value) lands.
+  fluent chaining (now unblocked — #928 method-call-on-value landed in 0.325.0, so
+  `expect(x).to_equal(5)` and `within(5s).expect(resp).status(200)` are buildable
+  once `fw` is ambient). See the new 3c for the fluent-facade item itself.
 
 ## Pending Migrations
 

@@ -724,16 +724,15 @@ expect_stdout_matches_regex(fw: ptr, out: string, pattern: string, msg: string) 
 // (not wall-clock) deltas: only the delta is meaningful and a wall
 // jump would corrupt it.
 //
-// NOTE on messages: a bare `${budget}` is NOT used — Duration
-// interpolation is broken on the current compiler (renders every
-// value as "10ns"). The .ms accessor interpolates correctly, so the
-// message reports ms on both sides.
+// The budget renders directly via ${budget} (Duration interpolation
+// picks the largest readable unit — `50ms`, `1.5s`); the elapsed side
+// is a plain ns count, so we show it as ms.
 expect_elapsed_under(fw: ptr, elapsed_ns: long, budget: Duration, msg: string) {
     if elapsed_ns < budget.ns {
         // under budget — pass (no-op)
     } else {
         elapsed_ms = elapsed_ns / 1000000
-        fail(fw, "${msg} — took ${elapsed_ms}ms, budget ${budget.ms}ms")
+        fail(fw, "${msg} — took ${elapsed_ms}ms, budget ${budget}")
     }
 }
 
