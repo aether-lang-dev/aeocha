@@ -3,8 +3,10 @@
 // porter's "don't balloon test surface" guidance:
 //
 //   1. Process matchers — happy path against /bin/echo and
-//      /bin/sh -c. POSIX-only; skip on Windows where os.run_capture
-//      uses POSIX-fallback shims.
+//      /bin/sh -c, including the regex stdout matcher (std.regex)
+//      and the stderr matchers backed by os.run_full's separate
+//      stdout/stderr capture. POSIX-only; skip on Windows where
+//      os.run_capture uses POSIX-fallback shims.
 //
 //   2. HTTP matchers — happy path against a plain in-process
 //      std.http server with three hand-rolled routes (/info,
@@ -13,14 +15,15 @@
 //      downstream servirtium-vcr record/replay project just to get a
 //      server — std.http (already needed for the matchers) is enough.
 //
-// The test calls the matchers from main()'s scope rather than
-// wrapping them in `aeocha.describe / it` blocks. Reason:
-// `it()`-callback closures don't currently capture top-level
-// `const` or top-level actor types — the HTTP section needs both —
-// and the porter's actual tests use the closure shape against
-// values declared inside the closure body anyway. The framework's
-// init / fail / run_summary surface still exercises end-to-end;
-// the closure path is exercised by the existing example_self_test.
+// Section 1 (process) is wrapped in describe/it so it registers real
+// pass/fail counts and drives the it()-closure path through the whole
+// matcher fleet. Section 2 (HTTP) stays in main()'s scope: an it()
+// callback still cannot `spawn` a top-level actor type — the closure's
+// generated function reports `unknown type name` for the actor struct
+// (verified on ae 0.324.0) — and the HTTP fixture server is a spawned
+// actor. (The older blanket claim that closures can't capture top-level
+// `const` is no longer true on 0.324.0; only the actor-spawn limit
+// remains, and it's an upstream codegen gap, not an Aeocha one.)
 //
 // Failure-path coverage is left to the porter's downstream tests
 // — that's the whole "rely on focused use to find gaps" trade.
@@ -88,64 +91,120 @@ handle_missing(req: ptr, res: ptr, ud: ptr) {
     http.response_set_body(res, "not found")
 }
 
+// Process matchers, grouped as describe/it so they register real
+// pass/fail counts and exercise the it()-closure path through the
+// matcher fleet. Each it() callback captures only `fw` and declares
+// its run_capture/run_full locals in-body — the shape that has always
+// worked across closures (and the shape downstream tests use). Locals
+// named `out` not `stdout` — Windows MinGW <stdio.h> defines `stdout`
+// as a macro, so a local with that name fails to compile.
 run_process_section(fw: ptr) {
-    println("\n=== expect_* — process matchers ===\n")
+    aeocha.describe(fw, "process matchers") {
+        // /bin/echo "hello world" — note os.run_capture synthesises
+        // argv[0] from the prog string, so the list holds only the
+        // remaining args (same convention as
+        // tests/regression/test_run_capture_status.ae).
+        aeocha.it(fw, "captures basic echo stdout + exit") callback {
+            argv = list.new()
+            list.add(argv, "hello world")
+            out, exit_code, err = os.run_capture("/bin/echo", argv, null)
+            aeocha.expect_no_spawn_error(fw, err, "spawn ok")
+            aeocha.expect_exit(fw, exit_code, 0, "echo exited cleanly")
+            aeocha.expect_stdout_contains(fw, out, "hello world", "stdout has greeting")
+        }
 
-    // /bin/echo "hello world" — note os.run_capture synthesises
-    // argv[0] from the prog string, so the list holds only the
-    // remaining args. Same convention used by the existing
-    // tests/regression/test_run_capture_status.ae. Local named
-    // `out` not `stdout` — Windows MinGW <stdio.h> defines `stdout`
-    // as a macro, so a local with that name fails to compile.
-    argv = list.new()
-    list.add(argv, "hello world")
-    out, exit_code, err = os.run_capture("/bin/echo", argv, null)
-    aeocha.expect_no_spawn_error(fw, err, "spawn ok")
-    aeocha.expect_exit(fw, exit_code, 0, "echo exited cleanly")
-    aeocha.expect_stdout_contains(fw, out, "hello world", "stdout has greeting")
-    println("  ✓ basic echo")
+        // Multi-line stdout via /bin/sh -c. The middle line is
+        // "Revision: 3" — exactly the porter's awk pattern.
+        aeocha.it(fw, "parses Revision-style key/value lines") callback {
+            argv = list.new()
+            list.add(argv, "-c")
+            list.add(argv, "echo Path: /home; echo Revision: 3; echo Last: now")
+            out, exit_code, _ = os.run_capture("/bin/sh", argv, null)
+            aeocha.expect_exit(fw, exit_code, 0, "sh ran")
+            aeocha.expect_stdout_line_count(fw, out, 3, "three lines")
+            aeocha.expect_stdout_line_field(fw, out, "Revision:", 1, "3", "head rev")
+            aeocha.expect_stdout_matches(fw, out, "Revision: *", "log entry shape")
+        }
 
-    // Multi-line stdout via /bin/sh -c. The middle line is
-    // "Revision: 3" — exactly the porter's awk pattern.
-    argv2 = list.new()
-    list.add(argv2, "-c")
-    list.add(argv2, "echo Path: /home; echo Revision: 3; echo Last: now")
-    out2, exit2, _ = os.run_capture("/bin/sh", argv2, null)
-    aeocha.expect_exit(fw, exit2, 0, "sh ran")
-    aeocha.expect_stdout_line_count(fw, out2, 3, "three lines")
-    aeocha.expect_stdout_line_field(fw, out2, "Revision:", 1, "3", "head rev")
-    aeocha.expect_stdout_matches(fw, out2, "Revision: *", "log entry shape")
-    println("  ✓ Revision-style key/value")
+        // Column-aligned output (the actual `svn info` shape from
+        // svn-aether Round 234): four spaces between key and value.
+        // Whitespace-run splitting makes field 1 = "3" regardless of
+        // spacing — the test author needn't count spaces.
+        aeocha.it(fw, "splits column-aligned key/value on whitespace runs") callback {
+            argv = list.new()
+            list.add(argv, "-c")
+            list.add(argv, "printf 'URL:         http://demo\\nRevision:    3\\nAuthor:      alice\\n'")
+            out, exit_code, _ = os.run_capture("/bin/sh", argv, null)
+            aeocha.expect_exit(fw, exit_code, 0, "sh column ran")
+            aeocha.expect_stdout_line_field(fw, out, "Revision:", 1, "3", "column-aligned head rev")
+            aeocha.expect_stdout_line_field(fw, out, "URL:", 1, "http://demo", "column-aligned url")
+            aeocha.expect_stdout_line_after(fw, out, "Author:", "alice", "after-prefix capture")
+        }
 
-    // Column-aligned output (the actual `svn info` shape from
-    // svn-aether Round 234): four spaces between key and value.
-    // Aeocha used to single-space-split here so field 1 was "" and
-    // the test author had to count spaces. Whitespace-run splitting
-    // makes field 1 = "3" regardless of spacing.
-    argv3 = list.new()
-    list.add(argv3, "-c")
-    list.add(argv3, "printf 'URL:         http://demo\\nRevision:    3\\nAuthor:      alice\\n'")
-    out3, exit3, _ = os.run_capture("/bin/sh", argv3, null)
-    aeocha.expect_exit(fw, exit3, 0, "sh column ran")
-    aeocha.expect_stdout_line_field(fw, out3, "Revision:", 1, "3", "column-aligned head rev")
-    aeocha.expect_stdout_line_field(fw, out3, "URL:", 1, "http://demo", "column-aligned url")
-    aeocha.expect_stdout_line_after(fw, out3, "Author:", "alice", "after-prefix capture")
-    println("  ✓ column-aligned key/value")
+        // Multi-token value via _after: log message with embedded spaces.
+        aeocha.it(fw, "captures multi-token value after a prefix") callback {
+            argv = list.new()
+            list.add(argv, "-c")
+            list.add(argv, "printf 'Log: first commit message\\nDate: now\\n'")
+            out, exit_code, _ = os.run_capture("/bin/sh", argv, null)
+            aeocha.expect_exit(fw, exit_code, 0, "sh log ran")
+            aeocha.expect_stdout_line_after(fw, out, "Log:", "first commit message",
+                "_after captures multi-token value")
+        }
 
-    // Multi-token value via _after: log message with embedded spaces.
-    argv4 = list.new()
-    list.add(argv4, "-c")
-    list.add(argv4, "printf 'Log: first commit message\\nDate: now\\n'")
-    out4, exit4, _ = os.run_capture("/bin/sh", argv4, null)
-    aeocha.expect_exit(fw, exit4, 0, "sh log ran")
-    aeocha.expect_stdout_line_after(fw, out4, "Log:", "first commit message",
-        "_after captures multi-token value")
-    println("  ✓ multi-token line_after")
+        // Regex matcher (PCRE2 via std.regex). Pattern is unanchored and
+        // tested per-line, so `^Revision: \d+$` asserts the whole-line
+        // shape without the trailing-newline split issue glob has.
+        aeocha.it(fw, "matches a stdout line against a PCRE2 regex") callback {
+            argv = list.new()
+            list.add(argv, "-c")
+            list.add(argv, "echo Path: /home; echo Revision: 3; echo Last: now")
+            out, exit_code, _ = os.run_capture("/bin/sh", argv, null)
+            aeocha.expect_exit(fw, exit_code, 0, "sh regex-fixture ran")
+            aeocha.expect_stdout_matches_regex(fw, out, "^Revision: [0-9]+$",
+                "regex whole-line revision shape")
+            aeocha.expect_stdout_matches_regex(fw, out, "Revision:\\s+\\d",
+                "regex with escaped class")
+        }
 
-    // expect_stderr_* matchers deferred — see comment in
-    // aeocha/module.ae explaining the os.run_capture
-    // stderr-capture gap. The porter's spec lists these matchers;
-    // they'll plug in once stderr capture lands as a stdlib change.
+        // Child stderr matchers via os.run_full's separate-stream
+        // capture. /bin/sh writes one line to stdout and one to stderr;
+        // run_full gives them back independently. stdin_data "" — the
+        // child reads nothing.
+        aeocha.it(fw, "captures child stderr separately from stdout") callback {
+            argv = list.new()
+            list.add(argv, "-c")
+            list.add(argv, "echo to-out; echo to-err 1>&2")
+            out, err, exit_code, spawn_err = os.run_full("/bin/sh", argv, null, "")
+            aeocha.expect_no_spawn_error(fw, spawn_err, "run_full spawned")
+            aeocha.expect_exit(fw, exit_code, 0, "run_full child exited cleanly")
+            aeocha.expect_stdout_contains(fw, out, "to-out", "stdout stream captured")
+            aeocha.expect_stderr_contains(fw, err, "to-err", "stderr stream captured separately")
+        }
+
+        // expect_stderr_empty — a child that writes nothing to fd 2.
+        aeocha.it(fw, "asserts empty stderr on a quiet child") callback {
+            argv = list.new()
+            list.add(argv, "-c")
+            list.add(argv, "echo only-stdout")
+            out, err, exit_code, spawn_err = os.run_full("/bin/sh", argv, null, "")
+            aeocha.expect_no_spawn_error(fw, spawn_err, "run_full(quiet) spawned")
+            aeocha.expect_stderr_empty(fw, err, "no stderr on clean run")
+        }
+
+        // Timing-budget matcher: a caller-measured monotonic-ns span vs
+        // a Duration literal. Budget is deliberately generous (500ms for
+        // a ~5ms sleep) so the test isn't flaky on a loaded CI box — we
+        // assert the matcher's plumbing (Duration param, .ns compare,
+        // pass path), not a tight latency SLA. The fail path + message
+        // formatting are covered out-of-suite.
+        aeocha.it(fw, "asserts a measured span is under a Duration budget") callback {
+            t0 = os.now_monotonic_ns()
+            sleep(5)
+            elapsed = os.now_monotonic_ns() - t0
+            aeocha.expect_elapsed_under(fw, elapsed, 500ms, "5ms sleep under 500ms budget")
+        }
+    }
 }
 
 run_http_section(fw: ptr) {

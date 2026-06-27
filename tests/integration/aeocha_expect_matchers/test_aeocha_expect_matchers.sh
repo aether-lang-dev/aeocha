@@ -49,15 +49,20 @@ if ! grep -q "passing" "$tmpdir/out.log"; then
     exit 1
 fi
 
-# Confirm at least one of the new matchers actually ran.
-if ! grep -qE "expect_(exit|http_status|stdout_line_field)" "$tmpdir/out.log"; then
-    # Aeocha only prints individual `it()` names, not matcher names.
-    # Look for the describe headers instead.
-    if ! grep -q "expect_\* — process matchers" "$tmpdir/out.log"; then
-        echo "  [FAIL] aeocha_expect_matchers — describe header missing"
-        cat "$tmpdir/out.log"
-        exit 1
-    fi
+# Confirm the sections actually ran. Aeocha prints describe/it names,
+# not matcher names, so look for the describe header the process
+# section emits ("process matchers") plus an it() line that only the
+# new matchers produce (the stderr / regex cases). If either is
+# missing the describe block was skipped or silently empty.
+if ! grep -q "process matchers" "$tmpdir/out.log"; then
+    echo "  [FAIL] aeocha_expect_matchers — process describe header missing"
+    cat "$tmpdir/out.log"
+    exit 1
+fi
+if ! grep -q "captures child stderr separately" "$tmpdir/out.log"; then
+    echo "  [FAIL] aeocha_expect_matchers — new stderr matcher it() missing"
+    cat "$tmpdir/out.log"
+    exit 1
 fi
 
 echo "  [PASS] aeocha_expect_matchers"
