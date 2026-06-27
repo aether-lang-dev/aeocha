@@ -13,24 +13,26 @@ subject-first, chainable, alongside the flat matchers. Each `expect_*` returns a
 small subject record (value + negated flag); `.to_*` reads it and reports via
 `fail` against an ambient `fw`. Design fully prototyped and it reads beautifully.
 
-**Blocked on TWO things, in order:**
-  1. *Cross-module UFCS.* The facade was built and integrated — then found
-     non-functional: **UFCS resolves only same-compilation-unit functions, not
-     imported/exported ones** (ae 0.325.0). `b.bump()` works when `bump` is in the
-     same file; across `import` it's `Undefined function 'b.bump'` (the normal
-     qualified call `mod.bump(b)` works fine — only the UFCS-dot rewrite skips
-     imported modules). Since the `.to_*` methods live in `aeocha.ae` and are
-     called from the user's file, the chain can't resolve. The same-file #928
-     repros never caught this. Filed as aether **#934** (follow-up to #928). The
-     17/13 "passing" greens seen during integration were STALE-CACHE GHOSTS — the
-     real clean-cache result is a compile error / segfault on the fail path.
-  2. *Ambient `fw` (3a).* Even once cross-module UFCS lands, without ambient `fw`
-     the chain must start `expect(fw, x)`, which defeats the point. The ambient
-     cell prototype itself works (a module `var current_fw: ptr` set by init() and
-     read by the matchers) — that part is fine; it's the UFCS boundary that kills it.
+**Blocker status (updated on ae 0.327.0):**
+  1. *Cross-module UFCS* — **FIXED in 0.327** (aether #934, closed). `b.bump()` on
+     an imported method now resolves (verified). This was the original blocker.
+  2. *Module-level `var` across imports* — **NOW THE BLOCKER** (aether **#937**,
+     open). The ambient-`fw` design needs a module `var current_fw` in `aeocha.ae`,
+     set by `init()` and read by the chained matchers. But a module `var` is NOT
+     shared across the import boundary on 0.327: a write is visible inside the
+     writing fn yet a later call reads back the initializer (`setc(7)` then
+     `getc() == 0` from a consumer; single-file gives `7`). So the matchers would
+     read `current_fw == null` and deref null on the first failure. This is what
+     actually sank the facade on 0.327 (not UFCS, which now works) — and it
+     re-explains the 0.325 segfault: same null-ambient-cell failure, just reached
+     via the then-also-broken UFCS path.
 
-Revert was clean (facade was uncommitted). Combine with 4f for
-`within(5s).expect(resp).status(200)` once both blockers clear.
+Do NOT re-attempt until #937 lands. When it does, the facade is a near-drop-in:
+the design is fully prototyped (subject struct + UFCS `.to_*` + `not_()`), reads
+beautifully, and cross-module UFCS already works. Watch for STALE-CACHE GHOSTS
+when re-testing — always `rm -rf ~/.aether/cache` and test the FAIL path first
+(the happy path doesn't read `current_fw`, so it masks a null ambient cell).
+Combine with 4f for `within(5s).expect(resp).status(200)`.
 
 ## Timing & Duration (leveraging the first-class `Duration` type)
 
