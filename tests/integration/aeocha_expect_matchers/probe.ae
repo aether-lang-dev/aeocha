@@ -226,7 +226,17 @@ run_http_section(fw: ptr) {
         spawn(SchedHelper())
         a = spawn(SrvActor())
         a ! StartSrv { raw: srv }
-        sleep(500)
+
+        // Wait for the server to bind via the within() floating modifier
+        // instead of a magic-number sleep(500): within(5s) retries the
+        // GET until /info responds (or 5s elapses). This both removes the
+        // guess and exercises 4f's retry-on-a-late-server against a real
+        // HTTP server. If the server never comes up, this fails loudly
+        // rather than the old sleep racing.
+        base = "http://127.0.0.1:${PORT}"
+        aeocha.within(5s)
+        aeocha.expect_http_get_status(fw, "${base}/info", 200, "server bound within 5s")
+        println("  ✓ within(5s) waited for the fixture server to bind")
 
         url = "http://127.0.0.1:${PORT}/info"
         req = client.request("GET", url)
@@ -253,7 +263,7 @@ run_http_section(fw: ptr) {
         // These do the request/send/free lifecycle internally, so each
         // is one line. /add/2/3 returns exactly "5" — the canonical
         // case for body_eq over body_contains ("5" must not match "50").
-        base = "http://127.0.0.1:${PORT}"
+        // `base` was declared above for the within() readiness probe.
         aeocha.expect_http_get_body_eq(fw, "${base}/add/2/3", "5", "GET /add/2/3 == 5")
         aeocha.expect_http_get_body_contains(fw, "${base}/info", "demo",
             "GET /info body has demo")
