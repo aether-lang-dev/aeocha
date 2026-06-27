@@ -21,9 +21,9 @@ small subject record (value + negated flag); `.to_*` reads it and reports via
      qualified call `mod.bump(b)` works fine — only the UFCS-dot rewrite skips
      imported modules). Since the `.to_*` methods live in `aeocha.ae` and are
      called from the user's file, the chain can't resolve. The same-file #928
-     repros never caught this. Filed as a follow-up on aether **#928**. The 17/13
-     "passing" greens seen during integration were STALE-CACHE GHOSTS — the real
-     clean-cache result is a compile error / segfault on the fail path.
+     repros never caught this. Filed as aether **#934** (follow-up to #928). The
+     17/13 "passing" greens seen during integration were STALE-CACHE GHOSTS — the
+     real clean-cache result is a compile error / segfault on the fail path.
   2. *Ambient `fw` (3a).* Even once cross-module UFCS lands, without ambient `fw`
      the chain must start `expect(fw, x)`, which defeats the point. The ambient
      cell prototype itself works (a module `var current_fw: ptr` set by init() and
