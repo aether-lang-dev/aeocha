@@ -57,7 +57,10 @@ Run with `ae run my_test.ae`. Exit code `0` on success, `1` on failure.
 | `expect_int(x).to_equal(5).to_be_gt(0)` | Fluent assertion chain (subject-first). Int matchers: `to_equal`, `to_be_gt`, `to_be_lt`, `to_be_truthy`, `to_be_falsy`, `not_()`. |
 | `expect_str(s).to_contain("x").to_start_with("y")` | Fluent string chain: `to_equal_str`, `to_contain`, `to_start_with`. |
 | `expect_int(x).satisfies(pred, msg)` | Fluent escape hatch — run an arbitrary `fn(value)->1/0` predicate mid-chain (`satisfies_str` for strings). |
+| `assert_str_eq_diff(actual, expected, msg)` | Exact string equality; on mismatch shows both values with a caret under the first differing byte (Jest-style). |
 | `expect_list_size(xs, n, msg)` | A `std.list` of strings has exactly `n` items. Also `expect_list_empty(xs, msg)`, `expect_list_has_str(xs, needle, msg)`. |
+| `expect_list_contains_all(xs, needles, msg)` | Every string in `needles` (a `std.list`) appears in `xs`, order-independent. |
+| `expect_list_every(xs, pred, msg)` | Every element satisfies `pred` (`fn(string)->1/0`); empty list passes vacuously. |
 | `expect_stdout_matches_regex(out, pattern, msg)` | A stdout line matches a PCRE2 regex (per-line, unanchored). |
 | `expect_stderr_contains(err, needle, msg)` | Captured child stderr (from `os.run_full`) contains `needle`. |
 | `expect_stderr_empty(err, msg)` | Child wrote nothing to stderr. |

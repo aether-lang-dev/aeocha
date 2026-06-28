@@ -60,7 +60,7 @@ exports (
     describe, it, it_within,
     before_each, after_each,
     fail, assert_true, assert_false,
-    assert_eq, assert_str_eq, assert_not_eq, assert_gt,
+    assert_eq, assert_str_eq, assert_str_eq_diff, assert_not_eq, assert_gt,
     assert_contains, assert_null, assert_not_null,
     // Integration-shape matchers — process surface
     expect_exit, expect_no_spawn_error,
@@ -103,6 +103,7 @@ exports (
     satisfies, satisfies_str,
     // Collection matchers (std.list of strings)
     expect_list_size, expect_list_empty, expect_list_has_str,
+    expect_list_contains_all, expect_list_every,
     run_summary
 )
 
@@ -444,6 +445,47 @@ assert_eq(actual: int, expected: int, msg: string) {
 assert_str_eq(actual: string, expected: string, msg: string) {
     if string.equals(actual, expected) == 0 {
         fail("${msg} — expected '${expected}', got '${actual}'")
+    }
+}
+
+// First byte index where a and b differ. -1 if equal. If one is a
+// prefix of the other, returns the shorter length (the first position
+// that's present in one but not the other). char_at_n over char_at:
+// lengths are cached, so the length-aware accessor skips a per-byte
+// strlen.
+_first_diff(a: string, b: string) -> int {
+    la = string.length(a)
+    lb = string.length(b)
+    lim = la
+    if lb < la { lim = lb }
+    i = 0
+    while i < lim {
+        if string.char_at_n(a, la, i) != string.char_at_n(b, lb, i) {
+            return i
+        }
+        i = i + 1
+    }
+    if la != lb { return lim }
+    return -1
+}
+
+// assert_str_eq_diff(actual, expected, msg) — exact string equality
+// like assert_str_eq, but on mismatch the message shows the two values
+// aligned with a caret under the first differing byte (Jest/Vitest
+// style). Reach for this over assert_str_eq when the strings are long
+// enough that "expected X got Y" buries the actual difference.
+//
+// The caret column is fixed: the value lines are printed as
+//   "        actual:   \"" + value
+// whose prefix is 19 chars (8 spaces + 'actual:   "'), so the caret
+// pads to 19 + index. ASCII byte index, not codepoint — fine for the
+// ASCII test output this targets; a multibyte value just points at the
+// first differing byte.
+assert_str_eq_diff(actual: string, expected: string, msg: string) {
+    if string.equals(actual, expected) == 0 {
+        d = _first_diff(actual, expected)
+        caret = string.pad_start("^", 19 + d + 1, 32)
+        fail("${msg} — strings differ at index ${d}\n        expected: \"${expected}\"\n        actual:   \"${actual}\"\n${caret}")
     }
 }
 
@@ -1294,21 +1336,61 @@ expect_list_empty(xs: ptr, msg: string) {
 
 // expect_list_has_str(xs, needle, msg) — some element equals `needle`
 // (exact string match).
-expect_list_has_str(xs: ptr, needle: string, msg: string) {
+// _list_has_str(xs, needle) -> 1 if some element equals needle, else 0.
+// Shared by the membership matchers below; never fails on its own.
+_list_has_str(xs: ptr, needle: string) -> int {
     n = list.size(xs)
-    found = 0
     i = 0
     while i < n {
         item = list.get_raw(xs, i)
         if string.equals(item, needle) == 1 {
-            found = 1
-            i = n
+            return 1
+        }
+        i = i + 1
+    }
+    return 0
+}
+
+// expect_list_has_str(xs, needle, msg) — some element equals `needle`
+// (exact string match).
+expect_list_has_str(xs: ptr, needle: string, msg: string) {
+    if _list_has_str(xs, needle) == 0 {
+        fail("${msg} — list has no element equal to '${needle}'")
+    }
+}
+
+// expect_list_contains_all(xs, needles, msg) — every string in
+// `needles` (also a std.list of strings) appears somewhere in `xs`.
+// Order-independent and tolerant of extra elements in `xs` — the
+// containsInAnyOrder/hasItems shape. Reports the FIRST missing needle.
+expect_list_contains_all(xs: ptr, needles: ptr, msg: string) {
+    m = list.size(needles)
+    i = 0
+    while i < m {
+        want = list.get_raw(needles, i)
+        if _list_has_str(xs, want) == 0 {
+            fail("${msg} — list is missing '${want}'")
+            i = m
         } else {
             i = i + 1
         }
     }
-    if found == 0 {
-        fail("${msg} — list has no element equal to '${needle}'")
+}
+
+// expect_list_every(xs, pred, msg) — every element satisfies `pred`
+// (a fn(string)->1/0). The everyItem shape. Reports the first failing
+// element and its index. An empty list passes vacuously.
+expect_list_every(xs: ptr, pred: fn, msg: string) {
+    n = list.size(xs)
+    i = 0
+    while i < n {
+        item = list.get_raw(xs, i)
+        if call(pred, item) == 0 {
+            fail("${msg} — element ${i} ('${item}') failed the predicate")
+            i = n
+        } else {
+            i = i + 1
+        }
     }
 }
 

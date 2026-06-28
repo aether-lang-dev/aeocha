@@ -170,9 +170,12 @@ carrying predicate + self-description); large design effort, and soft-assert alr
 covers most of the need (write several `expect_` calls; they all report). Reopen if
 demand appears.
 
-5e. **More content matchers worth stealing** (all Tier-1-shaped, additive): diff-style
-string-equality messages (show where two strings differ, Jest-style); `extracting`/
-map-then-assert; richer collection matchers (`containsInAnyOrder`, `everyItem`).
+5e. **[PARTIALLY DONE]** More content matchers. Shipped: `assert_str_eq_diff`
+(Jest-style — caret under the first differing byte, aligned to a fixed 19-char
+value column; ASCII byte index), `expect_list_contains_all` (containsInAnyOrder),
+`expect_list_every` (everyItem, vacuous-pass on empty). Still open: `extracting`/
+map-then-assert (a list-projection helper), and the caret diff is byte- not
+codepoint-aware (fine for ASCII test output; revisit if multibyte values matter).
 
 ## Pending Migrations
 

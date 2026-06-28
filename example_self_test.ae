@@ -35,6 +35,9 @@ always_ready() -> int { return 1 }
 // value, returns 1/0.
 is_positive(n: int) -> int { if n > 0 { return 1 } else { return 0 } }
 
+// String predicate for expect_list_every: non-empty element.
+is_nonempty_str(s: string) -> int { if string.length(s) > 0 { return 1 } else { return 0 } }
+
 main() {
     fw = aeocha.init()
 
@@ -122,6 +125,31 @@ main() {
             aeocha.it("empty list matcher") callback {
                 ys = list.new()
                 aeocha.expect_list_empty(ys, "fresh list is empty")
+            }
+
+            // Diff-style equality: equal values pass (mismatch caret
+            // message verified out-of-suite).
+            aeocha.it("assert_str_eq_diff on equal strings") callback {
+                aeocha.assert_str_eq_diff("hello", "hello", "identical")
+            }
+
+            // Richer collection matchers.
+            aeocha.it("contains_all (order-independent)") callback {
+                xs = list.new()
+                list.add(xs, "a")
+                list.add(xs, "b")
+                list.add(xs, "c")
+                needles = list.new()
+                list.add(needles, "c")
+                list.add(needles, "a")
+                aeocha.expect_list_contains_all(xs, needles, "has a and c in any order")
+            }
+
+            aeocha.it("every element satisfies a predicate") callback {
+                xs = list.new()
+                list.add(xs, "x")
+                list.add(xs, "yy")
+                aeocha.expect_list_every(xs, is_nonempty_str, "all non-empty")
             }
         }
 
