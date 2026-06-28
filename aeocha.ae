@@ -366,8 +366,11 @@ _it_impl(_ctx: ptr, description: string, test_fn: fn, budget_ns: long) {
     } else {
         map.put_raw(it_rec, "status", "PASS")
     }
-    duration_ms = elapsed_ns / 1000000
-    map.put_raw(it_rec, "duration_ms_str", "${duration_ms}")
+    // Store the FULL ns duration (decimal string to keep all 64 bits,
+    // like t_start_ns_str). The report derives ms from this when it
+    // needs the v1-compat field; rows carry the ns directly so fast
+    // tests don't all round to 0ms (4e).
+    map.put_raw(it_rec, "duration_ns_str", "${elapsed_ns}")
     list.add(its_list, it_rec)
 
     // Run after hooks (inherited inner-to-outer)
@@ -1223,18 +1226,23 @@ run_summary(fw: ptr) {
 }
 
 // Build the structured report payload for the aeb back-channel.
-// Format (version=1):
+// Format (version=1, ns-precision rows since 4e):
 //
 //   version=1
 //   total=N
 //   passed=N
 //   failed=N
 //   errored=N
-//   duration_ms=N
+//   duration_ms=N        (retained for v1 readers; may round to 0)
+//   duration_ns=N        (added: full-precision total)
 //   ---
-//   PASS\t<index>\t"<name>"\t<duration_ms>\n
-//   FAIL\t<index>\t"<name>"\t<duration_ms>\t<failure_message>\n
+//   PASS\t<index>\t"<name>"\t<duration_ns>\n
+//   FAIL\t<index>\t"<name>"\t<duration_ns>\t<failure_message>\n
 //   ...
+//
+// The per-row duration is nanoseconds (was ms) so sub-ms tests don't
+// all report 0; v1 row consumers match STATUS/index/"name"/message
+// and ignore the duration value, so this is wire-compatible.
 //
 // Self-truncates if the formatted report exceeds ~60K to avoid
 // pipe-buffer deadlock on Linux's 64K default. Drops
@@ -1251,13 +1259,19 @@ _format_aeb_report(fw: ptr, passed: int, failed: int) -> string {
     t_start_ns = string.get_long(t_start_str)
     // Monotonic end to match the monotonic start stamped in init() —
     // mixing the two clocks would yield a garbage delta.
-    total_duration_ms = (os.now_monotonic_ns() - t_start_ns) / 1000000
+    total_duration_ns = os.now_monotonic_ns() - t_start_ns
+    total_duration_ms = total_duration_ns / 1000000
 
     // Header KV block. Numbers fold via string interpolation —
     // ${x} is the same path the existing aeocha print() calls
     // already use, so no extra extern needed.
+    //
+    // Wire compatibility: version stays 1 and duration_ms is retained
+    // so existing v1 parsers keep working. duration_ns is ADDED for
+    // full precision (4e) — a fast run that rounds to duration_ms=0
+    // still reports real nanoseconds. v1 readers ignore the extra key.
     total = passed + failed
-    header = "version=1\ntotal=${total}\npassed=${passed}\nfailed=${failed}\nerrored=0\nduration_ms=${total_duration_ms}\n---\n"
+    header = "version=1\ntotal=${total}\npassed=${passed}\nfailed=${failed}\nerrored=0\nduration_ms=${total_duration_ms}\nduration_ns=${total_duration_ns}\n---\n"
 
     // Per-it rows. Try with full detail first; if oversized,
     // drop failure_messages; if still oversized, drop durations.
@@ -1308,7 +1322,11 @@ _build_rows(its: ptr, n: int, with_msg: int, with_dur: int) -> string {
         strbuilder.append_byte(b, 34)
 
         if with_dur != 0 {
-            dur_str = map.get_raw(it_rec, "duration_ms_str")
+            // Per-row duration is now nanoseconds (4e): full precision,
+            // so sub-ms tests don't all report 0. The v1 row consumer
+            // matches on STATUS/index/"name"/message and does not parse
+            // the duration value, so widening ms->ns is wire-safe.
+            dur_str = map.get_raw(it_rec, "duration_ns_str")
             strbuilder.append_byte(b, 9)
             strbuilder.append(b, dur_str)
         }

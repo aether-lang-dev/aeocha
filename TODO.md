@@ -79,9 +79,14 @@ retry-until-pass: re-run the block until its assertions hold or `within` elapses
 sleeping `poll` between attempts. Turns flaky async waits (the HTTP fixture's bare
 `sleep(500)`) into a bounded, self-documenting poll loop.
 
-4e. **ns-native aeb report.** Carry full ns resolution through `_build_rows` /
-`_format_aeb_report` instead of flattening to ms early, and format (`µs`/`ms`/`s`)
-only at the print boundary — fast tests currently all round to `0` ms.
+4e. **[DONE]** ns-native aeb report. The it-record now stores the full ns
+duration (`duration_ns_str`) instead of pre-rounded ms; the report carries ns
+through `_build_rows` (per-row duration column is ns) and adds a `duration_ns=`
+header field. Wire-compatible v1: `version=1` and `duration_ms=` are retained so
+existing parsers keep working (the row consumer matches STATUS/index/name/message
+and ignores the duration value). Proof: a fast run reports `duration_ms=0,
+duration_ns=86395` — real precision where it used to round to 0. The IPC probe now
+asserts `duration_ns=` is present.
 
 4f. **[DONE — ae 0.328]** `within(budget)` / `without(budget)` — the "floating
 modifier" pattern, shipped. `within(5s)` sets an ambient budget the next

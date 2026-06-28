@@ -7,7 +7,7 @@
 //
 // Asserts:
 //   - Header KV block: version=1, total=3, passed=1, failed=2,
-//     errored=0, duration_ms present.
+//     errored=0, duration_ms present, duration_ns present (4e).
 //   - "\n---\n" separator between header and rows.
 //   - Three tab-packed rows in order: PASS alpha, FAIL beta with
 //     "expected 1 got 2" message, FAIL gamma with "needle missing".
@@ -91,6 +91,7 @@ main() {
     failed_str = ""
     errored_str = ""
     duration_str = ""
+    duration_ns_str = ""
 
     i = 0
     while i < n_header {
@@ -113,6 +114,9 @@ main() {
         if string_starts_with(line, "duration_ms=") == 1 {
             duration_str = string_substring(line, 12, string_length(line))
         }
+        if string_starts_with(line, "duration_ns=") == 1 {
+            duration_ns_str = string_substring(line, 12, string_length(line))
+        }
         i = i + 1
     }
     string_array_free(header_lines)
@@ -125,10 +129,17 @@ main() {
     if string_length(duration_str) == 0 {
         fail("missing duration_ms in header")
     }
+    // 4e: duration_ns is the added full-precision field. Must be present
+    // and non-empty (and should be non-zero for any real run, but we
+    // don't assert > 0 to avoid flaking on an absurdly fast machine).
+    if string_length(duration_ns_str) == 0 {
+        fail("missing duration_ns in header")
+    }
 
-    println("  ✓ header KV (version=1, total=3, passed=1, failed=2, errored=0, duration_ms=${duration_str})")
+    println("  ✓ header KV (version=1, total=3, passed=1, failed=2, errored=0, duration_ms=${duration_str}, duration_ns=${duration_ns_str})")
 
-    // Per-it rows: STATUS\tindex\t"name"\tduration_ms[\tfailure_message]
+    // Per-it rows: STATUS\tindex\t"name"\tduration_ns[\tfailure_message]
+    // (duration column is ns since 4e; parsed by prefix/message only)
     rows = string_split(rows_blob, "\n")
     n_rows = string_array_size(rows)
 
