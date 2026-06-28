@@ -2,7 +2,16 @@
 
 ## Refinement / Future work
 
-3a. **Automatic `fw` threading.** Replace the explicit `fw` parameter with a per-thread "current framework" the matchers read from a module-static cell. `init()` would set it, `run_summary()` would read it, and every `expect_*` / `assert_*` matcher would lose its `fw` parameter. Tradeoff: cleaner signatures vs. inability to run two frameworks in parallel within one process.
+3a. **[DONE — ae 0.328+]** Ambient `fw` (dropped from matchers). `init()` stashes
+the framework in a module-level `current_fw` cell; every `assert_*`/`expect_*`/`fail`
+and the fluent chain read it, so matchers lost their `fw` parameter
+(`aeocha.assert_eq(a, b, msg)`). Only structural calls keep `fw`: top-level
+`describe(fw, name)` (no enclosing block to auto-inject `_ctx`) and `run_summary(fw)`.
+Hard breaking change (Aether has no overloading, so no gradual path): all 30 matcher
+signatures + 47 internal `fail()` call sites + the self-test + both integration probes
++ both regression tests updated. Tradeoff realised: **one framework per process** — a
+second `init()` rebinds `current_fw`; the old fw-threaded multi-framework mode is gone.
+Suite green on 0.329.
 
 3b. **Consider taking Aeocha back to the Aether repo and bundling.** Aeocha is a single self-contained file (`aeocha.ae`) with no `contrib` deps, no raw externs, and only `std.*` imports — a plain assertion test builds to a libc-only binary (verified via `ldd`). That makes it a natural candidate to live in-tree (e.g. `contrib/aeocha/` again) and ship with the compiler so downstream Aether projects get it without copying the file onto their include path. Tradeoff: independent release cadence + the "no upward deps in tests" boundary are easier to keep when it's a standalone repo; bundling couples Aeocha's version to the compiler's. Decide which matters more before moving.
 

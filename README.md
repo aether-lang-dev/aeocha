@@ -52,18 +52,18 @@ Run with `ae run my_test.ae`. Exit code `0` on success, `1` on failure.
 | `it(name) callback { … }` | Define a test case. |
 | `before_each() callback { … }` | Setup hook. |
 | `after_each() callback { … }` | Teardown hook. |
-| `assert_eq(fw, a, b, msg)` | Equality check (flat style). |
-| `expect_int(x).to_equal(5).to_be_gt(0)` | Fluent assertion chain (subject-first; no `fw` in the chain). Int matchers: `to_equal`, `to_be_gt`, `to_be_lt`, `to_be_truthy`, `to_be_falsy`, `not_()`. |
+| `assert_eq(a, b, msg)` | Equality check (flat style). No `fw` — matchers report against the framework `init()` set. Same for `assert_true/false`, `assert_str_eq`, `assert_not_eq`, `assert_gt`, `assert_contains`, `assert_null`, `assert_not_null`. |
+| `expect_int(x).to_equal(5).to_be_gt(0)` | Fluent assertion chain (subject-first). Int matchers: `to_equal`, `to_be_gt`, `to_be_lt`, `to_be_truthy`, `to_be_falsy`, `not_()`. |
 | `expect_str(s).to_contain("x").to_start_with("y")` | Fluent string chain: `to_equal_str`, `to_contain`, `to_start_with`. |
-| `expect_stdout_matches_regex(fw, out, pattern, msg)` | A stdout line matches a PCRE2 regex (per-line, unanchored). |
-| `expect_stderr_contains(fw, err, needle, msg)` | Captured child stderr (from `os.run_full`) contains `needle`. |
-| `expect_stderr_empty(fw, err, msg)` | Child wrote nothing to stderr. |
-| `expect_elapsed_under(fw, elapsed_ns, budget, msg)` | A caller-measured monotonic-ns span is under a `Duration` budget (e.g. `50ms`). |
+| `expect_stdout_matches_regex(out, pattern, msg)` | A stdout line matches a PCRE2 regex (per-line, unanchored). |
+| `expect_stderr_contains(err, needle, msg)` | Captured child stderr (from `os.run_full`) contains `needle`. |
+| `expect_stderr_empty(err, msg)` | Child wrote nothing to stderr. |
+| `expect_elapsed_under(elapsed_ns, budget, msg)` | A caller-measured monotonic-ns span is under a `Duration` budget (e.g. `50ms`). |
 | `within(5s)` / `without(5s)` | Floating modifier: make the **next** GET matcher retry until it passes (`within`) or stops passing (`without`), up to the budget, then auto-revert. `within_poll`/`without_poll` set the poll interval. |
-| `expect_http_get_status(fw, url, status, msg)` | GET `url`; assert transport ok + status. One line, no `resp` lifecycle. Honours a preceding `within`/`without`. |
-| `expect_http_get_body_eq(fw, url, want, msg)` | GET `url`; assert 200 + body **exactly** `want`. |
-| `expect_http_get_body_contains(fw, url, needle, msg)` | GET `url`; assert 200 + body contains `needle`. |
-| `run_summary(fw)` | Report and exit. |
+| `expect_http_get_status(url, status, msg)` | GET `url`; assert transport ok + status. One line, no `resp` lifecycle. Honours a preceding `within`/`without`. |
+| `expect_http_get_body_eq(url, want, msg)` | GET `url`; assert 200 + body **exactly** `want`. |
+| `expect_http_get_body_contains(url, needle, msg)` | GET `url`; assert 200 + body contains `needle`. |
+| `run_summary(fw)` | Report and exit. (Structural — still takes `fw`, as does top-level `describe(fw, name)`.) |
 
 ## License
 
