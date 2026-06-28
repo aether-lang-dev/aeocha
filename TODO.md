@@ -114,11 +114,9 @@ FluentSelenium combo.
   generic form, and it's been a moving target:
     - across a module boundary — broken on 0.328 (aether #940); **FIXED in 0.329**.
     - but from INSIDE an `it()` closure — STILL broken on 0.329 (the closure-body
-      `_aether_bare_adapter_X undeclared` analogue; filed aether **#943**). Since
-      matchers run inside `it()` callbacks, this is the case that matters, so a
-      generic `eventually(fw, predicate, msg)` is still blocked. Revisit when #943
-      lands; the design is trivial (poll `call(pred)` under the ambient budget — the
-      0/1/0 contract is already proven, just can't take a closure-passed predicate).
+      `_aether_bare_adapter_X undeclared` analogue; was filed aether **#943**).
+      BOTH #940 and #943 are now FIXED in 0.329, and `eventually(pred, msg)` shipped
+      (see 4d above). History kept here for context.
 
   DESIGN HISTORY (the "floating modifier" pattern) —
   from FluentSelenium (Paul's own lib): `within(5s)` floats in front of the *next*
@@ -146,6 +144,35 @@ idiomatic-BDD shape. (Implementation term: the ambient cell described below.)
   fluent chaining (now unblocked — #928 method-call-on-value landed in 0.325.0, so
   `expect(x).to_equal(5)` and `within(5s).expect(resp).status(200)` are buildable
   once `fw` is ambient). See the new 3c for the fluent-facade item itself.
+
+## Matcher ergonomics (Hamcrest / AssertJ inspiration)
+
+5a. **[DONE]** Custom matchers documented + escape hatch. A matcher is just a fn
+that calls `fail(msg)` (Tier-1) — now spelled out in README with examples, since
+it's a real strength nobody could discover. Added `satisfies(pred, msg)` /
+`satisfies_str` (AssertJ-style fluent escape hatch, `fn(value)->1/0`) and exported
+`IntSubject`/`StrSubject`.
+
+5b. **[DONE]** Collection matchers — `expect_list_size`, `expect_list_empty`,
+`expect_list_has_str` over a `std.list` of strings. Int-list matchers omitted (raw
+list stores ptrs; needs a boxing convention) — revisit if a real test needs it.
+
+5c. **Cross-module fluent extension** (blocked upstream). A user can't add a new
+`.to_*` to the chain from their own module: `IntSubject` is exported but Aether
+can't name a qualified type (`aeocha.IntSubject`) in another module's function
+signature. That's the next upstream ask (sibling of the UFCS/#934 line) before
+Tier-2 custom fluent matchers work cross-module. Flat matcher fns + `satisfies`
+cover the need until then.
+
+5d. **Hamcrest-style matcher combinators** (`allOf`/`anyOf`/`is(not(...))` as
+matcher *values*) — deliberate non-goal for now. Needs matcher-as-a-value (a struct
+carrying predicate + self-description); large design effort, and soft-assert already
+covers most of the need (write several `expect_` calls; they all report). Reopen if
+demand appears.
+
+5e. **More content matchers worth stealing** (all Tier-1-shaped, additive): diff-style
+string-equality messages (show where two strings differ, Jest-style); `extracting`/
+map-then-assert; richer collection matchers (`containsInAnyOrder`, `everyItem`).
 
 ## Pending Migrations
 

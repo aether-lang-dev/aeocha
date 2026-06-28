@@ -24,11 +24,16 @@
 
 import aeocha
 import std.string
+import std.list
 
 // Predicate for the eventually() case below — a zero-arg fn returning
 // 1 (holds) / 0. Top-level so it can be passed by bare name into the
 // it() closure (the eventually() predicate-fn path).
 always_ready() -> int { return 1 }
+
+// 1-arg predicate for the satisfies() escape hatch: takes the subject
+// value, returns 1/0.
+is_positive(n: int) -> int { if n > 0 { return 1 } else { return 0 } }
 
 main() {
     fw = aeocha.init()
@@ -95,6 +100,28 @@ main() {
 
             aeocha.it("chains string matchers") callback {
                 aeocha.expect_str("hello world").to_equal_str("hello world").to_contain("world").to_start_with("hello")
+            }
+        }
+
+        aeocha.describe("custom-matcher building blocks") {
+            // satisfies(): fluent escape hatch — a one-off predicate
+            // mid-chain, no new matcher needed.
+            aeocha.it("satisfies() runs a predicate on the subject") callback {
+                aeocha.expect_int(5).to_be_gt(0).satisfies(is_positive, "positive")
+            }
+
+            // Collection matchers over a std.list of strings.
+            aeocha.it("list size + membership") callback {
+                xs = list.new()
+                list.add(xs, "alpha")
+                list.add(xs, "beta")
+                aeocha.expect_list_size(xs, 2, "two items")
+                aeocha.expect_list_has_str(xs, "beta", "has beta")
+            }
+
+            aeocha.it("empty list matcher") callback {
+                ys = list.new()
+                aeocha.expect_list_empty(ys, "fresh list is empty")
             }
         }
 

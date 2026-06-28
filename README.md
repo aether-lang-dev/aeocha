@@ -56,6 +56,8 @@ Run with `ae run my_test.ae`. Exit code `0` on success, `1` on failure.
 | `assert_eq(a, b, msg)` | Equality check (flat style). No `fw` — matchers report against the framework `init()` set. Same for `assert_true/false`, `assert_str_eq`, `assert_not_eq`, `assert_gt`, `assert_contains`, `assert_null`, `assert_not_null`. |
 | `expect_int(x).to_equal(5).to_be_gt(0)` | Fluent assertion chain (subject-first). Int matchers: `to_equal`, `to_be_gt`, `to_be_lt`, `to_be_truthy`, `to_be_falsy`, `not_()`. |
 | `expect_str(s).to_contain("x").to_start_with("y")` | Fluent string chain: `to_equal_str`, `to_contain`, `to_start_with`. |
+| `expect_int(x).satisfies(pred, msg)` | Fluent escape hatch — run an arbitrary `fn(value)->1/0` predicate mid-chain (`satisfies_str` for strings). |
+| `expect_list_size(xs, n, msg)` | A `std.list` of strings has exactly `n` items. Also `expect_list_empty(xs, msg)`, `expect_list_has_str(xs, needle, msg)`. |
 | `expect_stdout_matches_regex(out, pattern, msg)` | A stdout line matches a PCRE2 regex (per-line, unanchored). |
 | `expect_stderr_contains(err, needle, msg)` | Captured child stderr (from `os.run_full`) contains `needle`. |
 | `expect_stderr_empty(err, msg)` | Child wrote nothing to stderr. |
@@ -66,6 +68,47 @@ Run with `ae run my_test.ae`. Exit code `0` on success, `1` on failure.
 | `expect_http_get_body_eq(url, want, msg)` | GET `url`; assert 200 + body **exactly** `want`. |
 | `expect_http_get_body_contains(url, needle, msg)` | GET `url`; assert 200 + body contains `needle`. |
 | `run_summary(fw)` | Report and exit. (Structural — still takes `fw`, as does top-level `describe(fw, name)`.) |
+
+## Custom matchers
+
+A matcher in Aeocha is just **a function that calls `aeocha.fail(msg)` when the
+check doesn't hold**. There's no base class, no registration, and no framework
+handle to thread — `fail` reports against the framework `init()` set. Aeocha's
+own `assert_*`/`expect_*` matchers are written exactly this way, so your matchers
+are first-class by construction.
+
+```aether
+// Your own matcher — define it anywhere, call it in any it().
+expect_even(n: int, msg: string) {
+    if n % 2 != 0 {
+        aeocha.fail("${msg} — ${n} is not even")
+    }
+}
+
+aeocha.it("counts are even") callback {
+    expect_even(items_processed(), "processed an even count")
+}
+```
+
+Because failures *accumulate* (a failed matcher records and continues rather than
+aborting), several `expect_`/`assert_` calls in one `it()` all report — you see
+every problem in a run, not just the first (soft-assert semantics).
+
+For a one-off check without naming a whole matcher, use the fluent escape hatch:
+
+```aether
+is_prime(n: int) -> int { ... }   // returns 1 / 0
+
+aeocha.it("is a prime over 10") callback {
+    aeocha.expect_int(candidate).to_be_gt(10).satisfies(is_prime, "is prime")
+}
+```
+
+Extending the *fluent chain* with a brand-new `.to_*` method (vs. a flat matcher
+fn) currently only works within the module that declares the subject type —
+`IntSubject`/`StrSubject` are exported, but Aether doesn't yet support naming a
+qualified type (`aeocha.IntSubject`) in another module's function signature. Use
+a flat matcher fn or `satisfies` from a consumer module until that lands.
 
 ## License
 

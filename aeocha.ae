@@ -96,8 +96,13 @@ exports (
     // fixed). expect_int/expect_str start a chain that reads the
     // framework from an ambient cell, so no `fw` leaks into the chain.
     expect_int, expect_str, not_,
+    IntSubject, StrSubject,
     to_equal, to_be_gt, to_be_lt, to_be_truthy, to_be_falsy,
     to_equal_str, to_contain, to_start_with,
+    // Fluent escape hatch — drop into a one-off predicate mid-chain.
+    satisfies, satisfies_str,
+    // Collection matchers (std.list of strings)
+    expect_list_size, expect_list_empty, expect_list_has_str,
     run_summary
 )
 
@@ -1238,6 +1243,73 @@ to_start_with(s: StrSubject, prefix: string) -> StrSubject {
         fail("'${s.value}' does not start with '${prefix}'")
     }
     return s
+}
+
+// satisfies(s, pred, msg) — fluent escape hatch (AssertJ-style). `pred`
+// takes the subject's value and returns 1 (ok) / 0 (fail). Lets a test
+// drop into an arbitrary one-off check mid-chain without defining a
+// whole new matcher:
+//   aeocha.expect_int(n).to_be_gt(0).satisfies(is_prime, "is prime")
+// `pred` is a top-level fn passed by bare name (works in closures /
+// across modules since aether #940/#943). One satisfies() per subject
+// type — Aether has no receiver-type overloading.
+satisfies(s: IntSubject, pred: fn, msg: string) -> IntSubject {
+    ok = 0
+    if call(pred, s.value) == 1 { ok = 1 }
+    _verdict_int(s, ok, "to satisfy '${msg}', got ${s.value}")
+    return s
+}
+
+satisfies_str(s: StrSubject, pred: fn, msg: string) -> StrSubject {
+    if call(pred, s.value) == 0 {
+        fail("'${s.value}' did not satisfy '${msg}'")
+    }
+    return s
+}
+
+// ---------------------------------------------------------------------------
+// Collection matchers (flat). Operate on a std.list of strings — the
+// common shape in tests (captured lines, names, ids). Tier-1 style:
+// plain functions that report via fail(), exactly like a user's own
+// custom matcher. Int lists are deliberately omitted (the raw list
+// stores pointers; an int-list convention would need boxing) — assert
+// on a string projection, or write a one-off matcher.
+// ---------------------------------------------------------------------------
+
+// expect_list_size(xs, want, msg) — the list has exactly `want` items.
+expect_list_size(xs: ptr, want: int, msg: string) {
+    n = list.size(xs)
+    if n != want {
+        fail("${msg} — expected ${want} items, got ${n}")
+    }
+}
+
+// expect_list_empty(xs, msg) — the list has no items.
+expect_list_empty(xs: ptr, msg: string) {
+    n = list.size(xs)
+    if n != 0 {
+        fail("${msg} — expected empty list, got ${n} items")
+    }
+}
+
+// expect_list_has_str(xs, needle, msg) — some element equals `needle`
+// (exact string match).
+expect_list_has_str(xs: ptr, needle: string, msg: string) {
+    n = list.size(xs)
+    found = 0
+    i = 0
+    while i < n {
+        item = list.get_raw(xs, i)
+        if string.equals(item, needle) == 1 {
+            found = 1
+            i = n
+        } else {
+            i = i + 1
+        }
+    }
+    if found == 0 {
+        fail("${msg} — list has no element equal to '${needle}'")
+    }
 }
 
 // ---------------------------------------------------------------------------
