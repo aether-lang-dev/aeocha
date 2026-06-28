@@ -25,6 +25,11 @@
 import aeocha
 import std.string
 
+// Predicate for the eventually() case below — a zero-arg fn returning
+// 1 (holds) / 0. Top-level so it can be passed by bare name into the
+// it() closure (the eventually() predicate-fn path).
+always_ready() -> int { return 1 }
+
 main() {
     fw = aeocha.init()
 
@@ -90,6 +95,18 @@ main() {
 
             aeocha.it("chains string matchers") callback {
                 aeocha.expect_str("hello world").to_equal_str("hello world").to_contain("world").to_start_with("hello")
+            }
+        }
+
+        aeocha.describe("eventually (poll-until)") {
+            // within(2s) makes eventually() poll the predicate until it
+            // returns 1. The predicate here is already true, so it
+            // passes on the first poll — exercises the predicate-fn
+            // path (bare top-level fn passed into an it() closure and
+            // across the aeocha import boundary) without timing flake.
+            aeocha.it("polls a predicate until it holds") callback {
+                aeocha.within(2s)
+                aeocha.eventually(always_ready, "predicate holds within 2s")
             }
         }
 

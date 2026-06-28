@@ -88,6 +88,9 @@ exports (
     // Floating-modifier retry scoping (FluentSelenium within/without):
     // set an ambient budget the next GET matcher polls against.
     within, within_poll, without, without_poll,
+    // Generic poll-until form of the floating modifier (within(5s);
+    // eventually(pred, msg)). Unblocked by aether #940/#943.
+    eventually,
     // Fluent assertion facade — subject-first, chainable (ae 0.328+:
     // needs cross-module UFCS #934 + module-var-across-import #937, both
     // fixed). expect_int/expect_str start a chain that reads the
@@ -133,13 +136,18 @@ within_poll(budget: Duration, poll: Duration) { retry_budget_ns = budget.ns  ret
 without(budget: Duration)       { retry_budget_ns = budget.ns  retry_poll_ns = 50000000  retry_without = 1 }
 without_poll(budget: Duration, poll: Duration) { retry_budget_ns = budget.ns  retry_poll_ns = poll.ns  retry_without = 1 }
 
-// Snapshot-and-clear the ambient retry state for one matcher invocation.
-// Returns the budget (0 = no retry). The caller reads retry_poll_ns /
-// retry_without after this if budget > 0. Clearing here makes the
-// modifier one-shot regardless of which matcher consumed it.
+// Snapshot the ambient retry budget and FULLY reset the retry state for
+// the next matcher. Returns the budget (0 = no retry). The caller must
+// read retry_poll_ns / retry_without BEFORE calling this (they're reset
+// here too). Resetting all three — not just the budget — is essential:
+// otherwise a no-within matcher after a without() would inherit the
+// stale without flag and invert its sense. One-shot means one-shot for
+// every field of the modifier.
 _take_retry_budget() -> long {
     b = retry_budget_ns
     retry_budget_ns = 0
+    retry_poll_ns = 0
+    retry_without = 0
     return b
 }
 
@@ -1000,13 +1008,14 @@ _http_get_probe(url: string, want_status: int, kind: int, want: string) -> int {
 // no budget is set this is a single probe — identical to the old
 // one-shot behaviour. Consumes the budget (one-shot modifier).
 _http_get_retry(url: string, want_status: int, kind: int, want: string) -> int {
+    // Snapshot poll/without BEFORE _take_retry_budget (which resets them).
+    poll = retry_poll_ns
+    without = retry_without
     budget = _take_retry_budget()
     if budget == 0 {
         return _http_get_probe(url, want_status, kind, want)
     }
     deadline = os.now_monotonic_ns() + budget
-    poll = retry_poll_ns
-    without = retry_without
     // For within: succeed as soon as probe==1. For without: succeed as
     // soon as probe==0 (condition gone). `target` is the probe value
     // that means "done, satisfied".
@@ -1061,6 +1070,59 @@ expect_http_get_body_contains(url: string, needle: string, msg: string) {
     ok = _http_get_retry(url, 200, 2, needle)
     if ok == 0 {
         fail("${msg} — GET ${url} body never contained '${needle}' (200)")
+    }
+}
+
+// eventually(pred, msg) — the generic poll-until form of the floating
+// modifier. `pred` is a zero-arg function returning 1 (condition holds)
+// or 0. Under a preceding within(budget) it polls pred until it returns
+// 1 (or the budget elapses); under without(budget) it polls until pred
+// returns 0. With no budget it evaluates pred ONCE — same "no within,
+// no waiting" contract as the GET matchers. Fails if the target wasn't
+// reached.
+//
+//   within(5s)
+//   aeocha.eventually(server_is_up, "server came up")
+//
+// `pred` is typically a top-level function passed by bare name; that
+// works from inside an it() closure and across the import boundary
+// since aether #940 / #943 landed.
+eventually(pred: fn, msg: string) {
+    // Snapshot poll/without BEFORE _take_retry_budget (which resets them).
+    without = retry_without
+    poll = retry_poll_ns
+    budget = _take_retry_budget()
+    // Target probe value meaning "satisfied": 1 for within, 0 for without.
+    target = 1
+    if without == 1 { target = 0 }
+
+    last = 0
+    if call(pred) == 1 { last = 1 }
+    done = 0
+    if last == target { done = 1 }
+    if budget == 0 {
+        // No within()/without(): single evaluation, no waiting.
+        done = 1
+    }
+    if done == 0 {
+        deadline = os.now_monotonic_ns() + budget
+        while done == 0 {
+            if os.now_monotonic_ns() >= deadline {
+                done = 1
+            } else {
+                sleep(poll / 1000000)
+                last = 0
+                if call(pred) == 1 { last = 1 }
+                if last == target { done = 1 }
+            }
+        }
+    }
+    if last != target {
+        if without == 1 {
+            fail("${msg} — condition still held after budget")
+        } else {
+            fail("${msg} — condition not met within budget")
+        }
     }
 }
 

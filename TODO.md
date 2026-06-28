@@ -74,10 +74,18 @@ over-budget body that also asserts wrong shows both messages). Reuses the monoto
 elapsed the aeb report already records — no extra measurement. Self-test covers the
 pass path; over-budget + over-budget-and-failing verified out-of-suite.
 
-4d. **`eventually(fw, within: Duration, poll: Duration) callback { ... }`** —
-retry-until-pass: re-run the block until its assertions hold or `within` elapses,
-sleeping `poll` between attempts. Turns flaky async waits (the HTTP fixture's bare
-`sleep(500)`) into a bounded, self-documenting poll loop.
+4d. **[DONE — ae 0.329]** `eventually(pred, msg)` — generic poll-until form of the
+floating modifier. `pred` is a zero-arg `fn` returning 1/0; under a preceding
+`within(budget)` it polls until `pred` holds, under `without(budget)` until it stops
+holding, no budget → one evaluation. Shape landed as a *predicate fn* (not a
+trailing block) because that's what the bare-fn-into-closure fixes enable: blocked
+through 0.328 by #940 (bare fn across module) then #943 (bare fn inside closure),
+both now fixed. Reuses the 4f retry cells; fixed a latent bug found while building
+it — `_take_retry_budget` only cleared the budget, so a no-`within` matcher after a
+`without()` inherited the stale flag and inverted its sense (the GET matchers had
+the same latent bug; now all three retry fields reset, and callers snapshot
+poll/without *before* taking the budget). Self-test covers the pass path; the
+within-timeout / without / one-shot paths verified out-of-suite.
 
 4e. **[DONE]** ns-native aeb report. The it-record now stores the full ns
 duration (`duration_ns_str`) instead of pre-rounded ms; the report carries ns
