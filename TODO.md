@@ -157,12 +157,14 @@ it's a real strength nobody could discover. Added `satisfies(pred, msg)` /
 `expect_list_has_str` over a `std.list` of strings. Int-list matchers omitted (raw
 list stores ptrs; needs a boxing convention) — revisit if a real test needs it.
 
-5c. **Cross-module fluent extension** (blocked upstream). A user can't add a new
-`.to_*` to the chain from their own module: `IntSubject` is exported but Aether
-can't name a qualified type (`aeocha.IntSubject`) in another module's function
-signature. That's the next upstream ask (sibling of the UFCS/#934 line) before
-Tier-2 custom fluent matchers work cross-module. Flat matcher fns + `satisfies`
-cover the need until then.
+5c. **[MOSTLY WORKS]** Cross-module fluent extension. CORRECTION to the earlier
+"blocked" note: a consumer module CAN add its own `.to_*` to the chain on 0.329 —
+write `to_be_even(s: IntSubject, msg) -> IntSubject` using the BARE exported type
+name; UFCS resolves it and it chains. Verified. The ONLY residual gap: the
+qualified form `aeocha.IntSubject` doesn't parse in a type position (parser takes a
+dotted name as a call, not a type), so you can't disambiguate if two imports both
+export `IntSubject`. Filed upstream as aether #946. Low impact — bare name is fine
+in practice; README now shows the working pattern.
 
 5d. **Hamcrest-style matcher combinators** (`allOf`/`anyOf`/`is(not(...))` as
 matcher *values*) — deliberate non-goal for now. Needs matcher-as-a-value (a struct

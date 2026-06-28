@@ -107,11 +107,29 @@ aeocha.it("is a prime over 10") callback {
 }
 ```
 
-Extending the *fluent chain* with a brand-new `.to_*` method (vs. a flat matcher
-fn) currently only works within the module that declares the subject type —
-`IntSubject`/`StrSubject` are exported, but Aether doesn't yet support naming a
-qualified type (`aeocha.IntSubject`) in another module's function signature. Use
-a flat matcher fn or `satisfies` from a consumer module until that lands.
+You can also extend the *fluent chain itself* with your own `.to_*` method, from
+your own module. The subject types `IntSubject`/`StrSubject` are exported, and a
+matcher is just a free function taking the subject first (it chains via UFCS):
+
+```aether
+import aeocha
+
+// A custom fluent matcher — note the bare type name `IntSubject`.
+to_be_even(s: IntSubject, msg: string) -> IntSubject {
+    if s.value % 2 != 0 { aeocha.fail("${msg} — ${s.value} is not even") }
+    return s   // return the subject so the chain continues
+}
+
+aeocha.it("count is a positive even") callback {
+    aeocha.expect_int(count()).to_be_gt(0).to_be_even("even count")
+}
+```
+
+One caveat: use the **bare** `IntSubject`, not the qualified `aeocha.IntSubject` —
+Aether accepts a dotted name as a call (`aeocha.fail(...)`) but not yet as a type
+in a signature. The bare name is in scope from `import aeocha`. (This only bites if
+another imported module also exports a type named `IntSubject`, forcing
+disambiguation you can't currently spell — rare in practice.)
 
 ## License
 
