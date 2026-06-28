@@ -125,11 +125,9 @@ aeocha.it("count is a positive even") callback {
 }
 ```
 
-One caveat: use the **bare** `IntSubject`, not the qualified `aeocha.IntSubject` —
-Aether accepts a dotted name as a call (`aeocha.fail(...)`) but not yet as a type
-in a signature. The bare name is in scope from `import aeocha`. (This only bites if
-another imported module also exports a type named `IntSubject`, forcing
-disambiguation you can't currently spell — rare in practice.)
+Either spelling of the type works: the bare `IntSubject` (in scope from
+`import aeocha`) or the qualified `aeocha.IntSubject` — use the qualified form if
+another imported module also exports an `IntSubject` and you need to disambiguate.
 
 ## License
 
