@@ -93,6 +93,16 @@ main() {
             }
         }
 
+        aeocha.describe("it_within time budget") {
+            // Generous budget (500ms for a trivial body) so the test
+            // asserts the it_within plumbing, not a tight SLA — won't
+            // flake on a loaded CI box. The over-budget fail path is
+            // covered out-of-suite.
+            aeocha.it_within("a fast body stays under its budget", 500ms) callback {
+                aeocha.assert_eq(1 + 1, 2, "quick check")
+            }
+        }
+
         aeocha.describe("before/after_each hooks") {
             aeocha.before_each() callback {
                 ref_set(hook_counter, ref_get(hook_counter) + 1)

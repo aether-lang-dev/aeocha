@@ -50,6 +50,7 @@ Run with `ae run my_test.ae`. Exit code `0` on success, `1` on failure.
 | `init()` | Initialize framework context. |
 | `describe(fw, name) { … }` | Group tests. |
 | `it(name) callback { … }` | Define a test case. |
+| `it_within(name, budget) callback { … }` | A test case that also fails if its body runs longer than `budget` (a `Duration`, e.g. `50ms`). |
 | `before_each() callback { … }` | Setup hook. |
 | `after_each() callback { … }` | Teardown hook. |
 | `assert_eq(a, b, msg)` | Equality check (flat style). No `fw` — matchers report against the framework `init()` set. Same for `assert_true/false`, `assert_str_eq`, `assert_not_eq`, `assert_gt`, `assert_contains`, `assert_null`, `assert_not_null`. |

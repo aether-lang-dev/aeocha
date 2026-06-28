@@ -65,9 +65,14 @@ per-`it()` duration from wall-clock `clock_ns()` deltas (can jump under NTP) to
 budget: Duration, msg)` — assert a measured span is under a budget written as a
 duration literal (`50ms`). Caller measures with `os.now_monotonic_ns()` deltas.
 
-4c. **`it_within(fw, name, budget: Duration) callback { ... }`** — an `it()` that
-auto-fails if the test body runs longer than `budget`. Wraps the existing per-`it()`
-timing; no manual start/stop in the test body. The ergonomic headline feature.
+4c. **[DONE]** `it_within(name, budget: Duration) callback { ... }` — an `it()`
+that also fails if the test body runs longer than `budget` (no `fw`, post-3a). It
+and plain `it()` share an internal `_it_impl(_ctx, desc, fn, budget_ns)`; budget 0
+disables the check. The over-budget `fail()` fires while `current_it` is still set,
+so it counts against the case and composes with the normal assertion verdict (an
+over-budget body that also asserts wrong shows both messages). Reuses the monotonic
+elapsed the aeb report already records — no extra measurement. Self-test covers the
+pass path; over-budget + over-budget-and-failing verified out-of-suite.
 
 4d. **`eventually(fw, within: Duration, poll: Duration) callback { ... }`** —
 retry-until-pass: re-run the block until its assertions hold or `within` elapses,

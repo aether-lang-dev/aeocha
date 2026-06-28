@@ -57,7 +57,7 @@ import std.net
 
 exports (
     init,
-    describe, it,
+    describe, it, it_within,
     before_each, after_each,
     fail, assert_true, assert_false,
     assert_eq, assert_str_eq, assert_not_eq, assert_gt,
@@ -287,6 +287,23 @@ _run_afters(s: ptr) {
 // ---------------------------------------------------------------------------
 
 it(_ctx: ptr, description: string, test_fn: fn) {
+    // budget_ns 0 = no time budget (plain it()).
+    _it_impl(_ctx, description, test_fn, 0)
+}
+
+// it_within(_ctx, description, budget, test_fn) — an it() that also
+// fails if the test body takes longer than `budget`. The budget check
+// is layered on top of the normal assertion-based pass/fail: a body
+// that asserts cleanly but runs over budget still goes red. Uses the
+// same monotonic elapsed the report already records, so there's no
+// extra measurement. `budget` is a Duration literal (`50ms`, `2s`).
+it_within(_ctx: ptr, description: string, budget: Duration, test_fn: fn) {
+    _it_impl(_ctx, description, test_fn, budget.ns)
+}
+
+// Shared it() body. budget_ns > 0 adds a "ran within budget" check
+// after the body completes; 0 disables it.
+_it_impl(_ctx: ptr, description: string, test_fn: fn, budget_ns: long) {
     fw = _fw_of(_ctx)
     passed_ref = map.get_raw(fw, "passed")
     failed_ref = map.get_raw(fw, "failed")
@@ -313,6 +330,19 @@ it(_ctx: ptr, description: string, test_fn: fn) {
     old_failed = ref_get(failed_ref)
     call(test_fn)
     t_end_ns = os.now_monotonic_ns()
+    elapsed_ns = t_end_ns - t_start_ns
+
+    // Time-budget check (it_within). Reported via fail() while
+    // current_it is still set, so it counts against this it() and its
+    // message is captured in the record. Done before tearing down
+    // current_it below.
+    if budget_ns > 0 {
+        if elapsed_ns >= budget_ns {
+            elapsed_ms = elapsed_ns / 1000000
+            budget_ms = budget_ns / 1000000
+            fail("${description} — exceeded time budget: ${elapsed_ms}ms >= ${budget_ms}ms")
+        }
+    }
 
     // Tear down "current" pointer before any after-hooks so a hook
     // failure doesn't get mis-attributed to this it's record.
@@ -336,7 +366,7 @@ it(_ctx: ptr, description: string, test_fn: fn) {
     } else {
         map.put_raw(it_rec, "status", "PASS")
     }
-    duration_ms = (t_end_ns - t_start_ns) / 1000000
+    duration_ms = elapsed_ns / 1000000
     map.put_raw(it_rec, "duration_ms_str", "${duration_ms}")
     list.add(its_list, it_rec)
 
