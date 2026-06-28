@@ -108,9 +108,9 @@ run_process_section(fw: ptr) {
             argv = list.new()
             list.add(argv, "hello world")
             out, exit_code, err = os.run_capture("/bin/echo", argv, null)
-            aeocha.expect_no_spawn_error(fw, err, "spawn ok")
-            aeocha.expect_exit(fw, exit_code, 0, "echo exited cleanly")
-            aeocha.expect_stdout_contains(fw, out, "hello world", "stdout has greeting")
+            aeocha.expect_no_spawn_error(err, "spawn ok")
+            aeocha.expect_exit(exit_code, 0, "echo exited cleanly")
+            aeocha.expect_stdout_contains(out, "hello world", "stdout has greeting")
         }
 
         // Multi-line stdout via /bin/sh -c. The middle line is
@@ -120,10 +120,10 @@ run_process_section(fw: ptr) {
             list.add(argv, "-c")
             list.add(argv, "echo Path: /home; echo Revision: 3; echo Last: now")
             out, exit_code, _ = os.run_capture("/bin/sh", argv, null)
-            aeocha.expect_exit(fw, exit_code, 0, "sh ran")
-            aeocha.expect_stdout_line_count(fw, out, 3, "three lines")
-            aeocha.expect_stdout_line_field(fw, out, "Revision:", 1, "3", "head rev")
-            aeocha.expect_stdout_matches(fw, out, "Revision: *", "log entry shape")
+            aeocha.expect_exit(exit_code, 0, "sh ran")
+            aeocha.expect_stdout_line_count(out, 3, "three lines")
+            aeocha.expect_stdout_line_field(out, "Revision:", 1, "3", "head rev")
+            aeocha.expect_stdout_matches(out, "Revision: *", "log entry shape")
         }
 
         // Column-aligned output (the actual `svn info` shape from
@@ -135,10 +135,10 @@ run_process_section(fw: ptr) {
             list.add(argv, "-c")
             list.add(argv, "printf 'URL:         http://demo\\nRevision:    3\\nAuthor:      alice\\n'")
             out, exit_code, _ = os.run_capture("/bin/sh", argv, null)
-            aeocha.expect_exit(fw, exit_code, 0, "sh column ran")
-            aeocha.expect_stdout_line_field(fw, out, "Revision:", 1, "3", "column-aligned head rev")
-            aeocha.expect_stdout_line_field(fw, out, "URL:", 1, "http://demo", "column-aligned url")
-            aeocha.expect_stdout_line_after(fw, out, "Author:", "alice", "after-prefix capture")
+            aeocha.expect_exit(exit_code, 0, "sh column ran")
+            aeocha.expect_stdout_line_field(out, "Revision:", 1, "3", "column-aligned head rev")
+            aeocha.expect_stdout_line_field(out, "URL:", 1, "http://demo", "column-aligned url")
+            aeocha.expect_stdout_line_after(out, "Author:", "alice", "after-prefix capture")
         }
 
         // Multi-token value via _after: log message with embedded spaces.
@@ -147,8 +147,8 @@ run_process_section(fw: ptr) {
             list.add(argv, "-c")
             list.add(argv, "printf 'Log: first commit message\\nDate: now\\n'")
             out, exit_code, _ = os.run_capture("/bin/sh", argv, null)
-            aeocha.expect_exit(fw, exit_code, 0, "sh log ran")
-            aeocha.expect_stdout_line_after(fw, out, "Log:", "first commit message",
+            aeocha.expect_exit(exit_code, 0, "sh log ran")
+            aeocha.expect_stdout_line_after(out, "Log:", "first commit message",
                 "_after captures multi-token value")
         }
 
@@ -160,10 +160,10 @@ run_process_section(fw: ptr) {
             list.add(argv, "-c")
             list.add(argv, "echo Path: /home; echo Revision: 3; echo Last: now")
             out, exit_code, _ = os.run_capture("/bin/sh", argv, null)
-            aeocha.expect_exit(fw, exit_code, 0, "sh regex-fixture ran")
-            aeocha.expect_stdout_matches_regex(fw, out, "^Revision: [0-9]+$",
+            aeocha.expect_exit(exit_code, 0, "sh regex-fixture ran")
+            aeocha.expect_stdout_matches_regex(out, "^Revision: [0-9]+$",
                 "regex whole-line revision shape")
-            aeocha.expect_stdout_matches_regex(fw, out, "Revision:\\s+\\d",
+            aeocha.expect_stdout_matches_regex(out, "Revision:\\s+\\d",
                 "regex with escaped class")
         }
 
@@ -176,10 +176,10 @@ run_process_section(fw: ptr) {
             list.add(argv, "-c")
             list.add(argv, "echo to-out; echo to-err 1>&2")
             out, err, exit_code, spawn_err = os.run_full("/bin/sh", argv, null, "")
-            aeocha.expect_no_spawn_error(fw, spawn_err, "run_full spawned")
-            aeocha.expect_exit(fw, exit_code, 0, "run_full child exited cleanly")
-            aeocha.expect_stdout_contains(fw, out, "to-out", "stdout stream captured")
-            aeocha.expect_stderr_contains(fw, err, "to-err", "stderr stream captured separately")
+            aeocha.expect_no_spawn_error(spawn_err, "run_full spawned")
+            aeocha.expect_exit(exit_code, 0, "run_full child exited cleanly")
+            aeocha.expect_stdout_contains(out, "to-out", "stdout stream captured")
+            aeocha.expect_stderr_contains(err, "to-err", "stderr stream captured separately")
         }
 
         // expect_stderr_empty — a child that writes nothing to fd 2.
@@ -188,8 +188,8 @@ run_process_section(fw: ptr) {
             list.add(argv, "-c")
             list.add(argv, "echo only-stdout")
             out, err, exit_code, spawn_err = os.run_full("/bin/sh", argv, null, "")
-            aeocha.expect_no_spawn_error(fw, spawn_err, "run_full(quiet) spawned")
-            aeocha.expect_stderr_empty(fw, err, "no stderr on clean run")
+            aeocha.expect_no_spawn_error(spawn_err, "run_full(quiet) spawned")
+            aeocha.expect_stderr_empty(err, "no stderr on clean run")
         }
 
         // Timing-budget matcher: a caller-measured monotonic-ns span vs
@@ -202,7 +202,7 @@ run_process_section(fw: ptr) {
             t0 = os.now_monotonic_ns()
             sleep(5)
             elapsed = os.now_monotonic_ns() - t0
-            aeocha.expect_elapsed_under(fw, elapsed, 500ms, "5ms sleep under 500ms budget")
+            aeocha.expect_elapsed_under(elapsed, 500ms, "5ms sleep under 500ms budget")
         }
     }
 }
@@ -217,7 +217,7 @@ run_http_section(fw: ptr) {
         // defaults missing return types to int). Use if/else
         // nesting instead of early-return to keep the function
         // single-exit.
-        aeocha.fail(fw, "server_create returned 0 — port ${PORT} busy?")
+        aeocha.fail("server_create returned 0 — port ${PORT} busy?")
     } else {
         http.server_get(srv, "/info", handle_info, 0)
         http.server_get(srv, "/add/2/3", handle_add, 0)
@@ -235,7 +235,7 @@ run_http_section(fw: ptr) {
         // rather than the old sleep racing.
         base = "http://127.0.0.1:${PORT}"
         aeocha.within(5s)
-        aeocha.expect_http_get_status(fw, "${base}/info", 200, "server bound within 5s")
+        aeocha.expect_http_get_status("${base}/info", 200, "server bound within 5s")
         println("  ✓ within(5s) waited for the fixture server to bind")
 
         url = "http://127.0.0.1:${PORT}/info"
@@ -243,17 +243,17 @@ run_http_section(fw: ptr) {
         resp, cerr = client.send_request(req)
         client.request_free(req)
         if cerr != "" {
-            aeocha.fail(fw, "transport error: ${cerr}")
+            aeocha.fail("transport error: ${cerr}")
         } else {
-            aeocha.expect_http_no_error(fw, resp, "transport clean")
-            aeocha.expect_http_status(fw, resp, 200, "got 200")
-            aeocha.expect_http_body_contains(fw, resp, "demo", "body has demo")
-            aeocha.expect_http_header(fw, resp, "X-Node-Hash", "abc123", "node hash header")
-            aeocha.expect_http_body_json_field(fw, resp, "head", "3", "head=3 in JSON")
+            aeocha.expect_http_no_error(resp, "transport clean")
+            aeocha.expect_http_status(resp, 200, "got 200")
+            aeocha.expect_http_body_contains(resp, "demo", "body has demo")
+            aeocha.expect_http_header(resp, "X-Node-Hash", "abc123", "node hash header")
+            aeocha.expect_http_body_json_field(resp, "head", "3", "head=3 in JSON")
             // Exact-body matcher against a resp the caller already holds.
             // /add/2/3 below proves the GET-level twin; this proves the
             // low-level sibling of expect_http_body_contains.
-            aeocha.expect_http_body_eq(fw, resp, "{\"head\":\"3\",\"name\":\"demo\"}",
+            aeocha.expect_http_body_eq(resp, "{\"head\":\"3\",\"name\":\"demo\"}",
                 "exact body equals fixture")
             println("  ✓ all 6 low-level HTTP matchers ran against fixture server")
             client.response_free(resp)
@@ -264,10 +264,10 @@ run_http_section(fw: ptr) {
         // is one line. /add/2/3 returns exactly "5" — the canonical
         // case for body_eq over body_contains ("5" must not match "50").
         // `base` was declared above for the within() readiness probe.
-        aeocha.expect_http_get_body_eq(fw, "${base}/add/2/3", "5", "GET /add/2/3 == 5")
-        aeocha.expect_http_get_body_contains(fw, "${base}/info", "demo",
+        aeocha.expect_http_get_body_eq("${base}/add/2/3", "5", "GET /add/2/3 == 5")
+        aeocha.expect_http_get_body_contains("${base}/info", "demo",
             "GET /info body has demo")
-        aeocha.expect_http_get_status(fw, "${base}/missing", 404, "GET /missing is 404")
+        aeocha.expect_http_get_status("${base}/missing", 404, "GET /missing is 404")
         println("  ✓ all 3 GET-and-assert matchers ran against fixture server")
 
         // No teardown handle needed — the server runs on a detached

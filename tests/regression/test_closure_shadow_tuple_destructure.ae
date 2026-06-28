@@ -56,7 +56,7 @@ main() {
     aeocha.describe(fw, "tuple-destructure shadow") {
         aeocha.it("re-destructures captured names without crashing") callback {
             out, status, _ = mywrap("echo world")
-            aeocha.expect_stdout_contains(fw, out, "world", "world reached body")
+            aeocha.expect_stdout_contains(out, "world", "world reached body")
         }
     }
     aeocha.run_summary(fw)

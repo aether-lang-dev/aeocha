@@ -15,7 +15,7 @@ main() {
         aeocha.it("uses list_new in a closure") callback {
             argv = list_new()
             list_add_raw(argv, "hi")
-            aeocha.assert_true(fw, 1, "trivial")
+            aeocha.assert_true(1, "trivial")
         }
     }
     aeocha.run_summary(fw)

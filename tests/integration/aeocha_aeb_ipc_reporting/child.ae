@@ -21,13 +21,13 @@ main() {
 
     aeocha.describe(fw, "ipc reporting cases") {
         aeocha.it("alpha") callback {
-            aeocha.assert_eq(fw, 1, 1, "trivially equal")
+            aeocha.assert_eq(1, 1, "trivially equal")
         }
         aeocha.it("beta") callback {
-            aeocha.assert_eq(fw, 1, 2, "should fail: expected 1 got 2")
+            aeocha.assert_eq(1, 2, "should fail: expected 1 got 2")
         }
         aeocha.it("gamma") callback {
-            aeocha.assert_contains(fw, "haystack", "needle missing", "should fail: needle missing")
+            aeocha.assert_contains("haystack", "needle missing", "should fail: needle missing")
         }
     }
 
