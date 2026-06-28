@@ -83,9 +83,15 @@ old `sleep(500)` magic number. Gives `within(5s).expect_http_get_status(...)` �
 FluentSelenium combo.
 
   Scope note: retry is baked into the GET matchers, NOT a generic
-  `eventually(predicate)` — passing a bare top-level `fn` across a module boundary
-  is broken on 0.328 (`_aether_bare_adapter_X undeclared`; filed aether **#940**).
-  Add a generic `eventually`/`within().expect_int(...)` once #940 lands.
+  `eventually(predicate)`. Passing a bare top-level `fn` predicate is needed for the
+  generic form, and it's been a moving target:
+    - across a module boundary — broken on 0.328 (aether #940); **FIXED in 0.329**.
+    - but from INSIDE an `it()` closure — STILL broken on 0.329 (the closure-body
+      `_aether_bare_adapter_X undeclared` analogue; filed aether **#943**). Since
+      matchers run inside `it()` callbacks, this is the case that matters, so a
+      generic `eventually(fw, predicate, msg)` is still blocked. Revisit when #943
+      lands; the design is trivial (poll `call(pred)` under the ambient budget — the
+      0/1/0 contract is already proven, just can't take a closure-passed predicate).
 
   DESIGN HISTORY (the "floating modifier" pattern) —
   from FluentSelenium (Paul's own lib): `within(5s)` floats in front of the *next*
