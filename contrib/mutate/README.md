@@ -101,8 +101,10 @@ That is the whole point — survivors are your missing tests.
 
 ## Mutation operators (core set)
 
-Each is matched **whitespace-padded** (`" + "`, `" > "`), so normal Aether
-spacing is required for a site to be seen:
+Operator mutators are matched **whitespace-padded** (`" + "`, `" > "`), so normal
+Aether spacing is required for a site to be seen — and a padded operator that sits
+*inside a string literal* is skipped (the tool tracks string boundaries, so
+`"a + b"` in your code is never mutated as arithmetic).
 
 | Operator | Mutation |
 |---|---|
@@ -111,6 +113,13 @@ spacing is required for a site to be seen:
 | `>` `<` `>=` `<=` | comparison flips |
 | `==` ↔ `!=` | equality flips |
 | `&&` ↔ `\|\|` | boolean |
+
+String-literal mutators target the literal's *content* (quotes preserved):
+
+| Mutator | Mutation |
+|---|---|
+| `STR->EMPTY` | a non-empty `"foo"` → `""` (catches tests that don't pin the returned string) |
+| `EMPTY->NONEMPTY` | an empty `""` → a sentinel (catches an unchecked empty-string case) |
 
 ## Reading the result
 
@@ -129,10 +138,14 @@ spacing is required for a site to be seen:
 
 This is a Tier-1, text-based tool. Know what it does and doesn't do:
 
-- **Text, not AST.** Operators are matched as padded tokens. `++`, `+=`, and
-  operators that abut other characters are skipped. A padded operator *inside a
-  string literal* can be mutated — a false mutant. Eyeball survivors with that
-  in mind.
+- **Text, not AST.** Operators are matched as padded tokens, so `++`, `+=`, and
+  operators that abut other characters are skipped. The tool *is* string-boundary
+  aware — a padded operator inside a `"..."` literal won't be mutated as code, and
+  string-literal mutators only touch real literals. The remaining blind spot is
+  **comments**: a `"..."` or a padded operator written in a `//` comment is still
+  treated as source, so it can produce a harmless false mutant (it changes nothing
+  the suite sees → survives). Keep operator/quote characters out of comments in a
+  SUT you mutate, or expect a stray survivor.
 - **Equivalent mutants.** Some changes don't alter behaviour (e.g. `<` → `<=` on
   a boundary your code never reaches). They "survive" without being real gaps.
   This is inherent to mutation testing, not a bug here.

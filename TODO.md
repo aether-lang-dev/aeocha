@@ -153,7 +153,10 @@ classifies each mutant via Aeocha's STRUCTURED report (not just an exit code):
 `ae check` (no-compile gate) → `ae build` → run + drain the `version=1` report off
 the IPC channel → read `failed=N`. Three-way verdict: killed (`failed>0`), survived
 (`failed==0`, a test gap), no-compile (excluded from the score so a non-compiling
-mutant can't masquerade as a kill). Core ~6 operators. Reports score + survivors.
+mutant can't masquerade as a kill). Core ~6 code operators PLUS string-literal mutators (non-empty -> "", "" ->
+sentinel) — and the engine is string-boundary aware, so a padded operator inside a
+"..." literal is no longer mutated as code (fixes the old operator-in-string false
+mutant). Reports score + survivors.
 Example (`contrib/mutate/example/`) is the README's calc CUT → 100%; the README
 shows a survivor case (drop `abs(-7)` → `SUB->ADD` survives → 66%). SUT restored
 byte-identical (md5-checked).
