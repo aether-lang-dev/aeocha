@@ -60,8 +60,12 @@ SUT_AFTER="$($MD5 "$SUT" | awk '{print $1}')"
 grep -q "baseline: suite passes" "$TMPDIR/out.log" || fail "no baseline-pass line"
 grep -q "1/3 mutants killed — mutation score 33%" "$TMPDIR/out.log" \
     || fail "unexpected score (wanted 1/3, 33%)"
-grep -Eq "SURVIVED +STR->EMPTY" "$TMPDIR/out.log" || fail "no STR->EMPTY survivor (string mutation broken?)"
-grep -Eq "killed +STR->EMPTY"   "$TMPDIR/out.log" || fail "STR->EMPTY never killed"
+# Survivors/kill are anchored to source lines: name() killed on line 10,
+# motto() survives on line 12.
+grep -Eq "SURVIVED +sut\.ae:12 +STR->EMPTY" "$TMPDIR/out.log" \
+    || fail "no STR->EMPTY survivor at sut.ae:12 (string mutation broken?)"
+grep -Eq "killed +sut\.ae:10 +STR->EMPTY" "$TMPDIR/out.log" \
+    || fail "STR->EMPTY not killed at sut.ae:10"
 # The crucial boundary-awareness check: the ` + ` inside help()'s string
 # must NOT have produced an operator mutant.
 if grep -q "ADD->SUB" "$TMPDIR/out.log"; then

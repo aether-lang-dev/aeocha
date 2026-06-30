@@ -174,6 +174,38 @@ _in_string(src: string, off: int) -> int {
     return instr
 }
 
+// 1-based line number containing byte offset `off` (count newlines
+// before it). Used to anchor each mutant to a source location.
+_line_at(src: string, off: int) -> int {
+    slen = string.length(src)
+    line = 1
+    i = 0
+    while i < off {
+        if i < slen {
+            if string.char_at_n(src, slen, i) == 10 { line = line + 1 }
+        }
+        i = i + 1
+    }
+    return line
+}
+
+// Byte offset of the n-th CODE occurrence of `find` (string literals
+// skipped), or -1. Mirrors _replace_nth's scan so the runner can report
+// the mutation's line without re-deriving it from the mutated text.
+_offset_of_nth(src: string, find: string, n: int) -> int {
+    flen = string.length(find)
+    k = 0
+    pos = string.index_of_from(src, find, 0)
+    while pos >= 0 {
+        if _in_string(src, pos) == 0 {
+            if k == n { return pos }
+            k = k + 1
+        }
+        pos = string.index_of_from(src, find, pos + flen)
+    }
+    return -1
+}
+
 // Count occurrences of `find` that are NOT inside a string literal.
 _count(src: string, find: string) -> int {
     flen = string.length(find)
@@ -253,6 +285,39 @@ _count_strings(src: string, want_empty: int) -> int {
     return n
 }
 
+// Byte offset (opening quote) of the n-th string literal matching
+// want_empty, or -1. Mirrors _mutate_nth_string's scan for line reporting.
+_offset_of_nth_string(src: string, n: int, want_empty: int) -> int {
+    slen = string.length(src)
+    i = 0
+    k = 0
+    while i < slen {
+        c = string.char_at_n(src, slen, i)
+        if c == 34 {
+            j = i + 1
+            scanning = 1
+            while scanning == 1 {
+                if j >= slen { scanning = 0 }
+                else {
+                    cj = string.char_at_n(src, slen, j)
+                    if cj == 92 { j = j + 2 }
+                    else { if cj == 34 { scanning = 0 } else { j = j + 1 } }
+                }
+            }
+            empty = 0
+            if j - i - 1 == 0 { empty = 1 }
+            if empty == want_empty {
+                if k == n { return i }
+                k = k + 1
+            }
+            i = j + 1
+        } else {
+            i = i + 1
+        }
+    }
+    return -1
+}
+
 // Replace the CONTENT of the n-th (0-based) string literal matching
 // want_empty with `content` (quotes preserved). "" if no n-th match.
 _mutate_nth_string(src: string, n: int, want_empty: int, content: string) -> string {
@@ -299,41 +364,58 @@ _mutate_nth_string(src: string, n: int, want_empty: int, content: string) -> str
 // ">" rule never half-eats a ">=".
 // ---------------------------------------------------------------------------
 
-// Classify one written mutant and report/tally it.
-_classify(label: string, i: int, test_path: string, incl: string, bin: string,
+// Final path component of `path` (the SUT's file name), for anchoring
+// mutants as `<file>:<line>` rather than a bare occurrence index.
+_basename(path: string) -> string {
+    plen = string.length(path)
+    last = -1
+    p = string.index_of_from(path, "/", 0)
+    while p >= 0 {
+        last = p
+        p = string.index_of_from(path, "/", p + 1)
+    }
+    if last < 0 { return path }
+    return string.substring(path, last + 1, plen)
+}
+
+// Classify one written mutant and report/tally it. `loc` is the source
+// anchor (`file.ae:line`); `label` is the mutation (`ADD->SUB`).
+_classify(loc: string, label: string, test_path: string, incl: string, bin: string,
           killed: ptr, survived: ptr, nocompile: ptr, survivors: ptr) {
     verdict = _oracle(test_path, incl, bin)
     if verdict == SURVIVED {
         ref_set(survived, ref_get(survived) + 1)
-        list.add(survivors, "${label} #${i}")
-        println("  SURVIVED   ${label}  (occurrence ${i})")
+        list.add(survivors, "${loc}  ${label}")
+        println("  SURVIVED   ${loc}  ${label}")
     } else {
         if verdict == KILLED {
             ref_set(killed, ref_get(killed) + 1)
-            println("  killed     ${label}  (occurrence ${i})")
+            println("  killed     ${loc}  ${label}")
         } else {
             // NOCOMPILE — the mutation produced invalid code. Excluded
             // from the score (never really tested), but reported so the
             // count is honest.
             ref_set(nocompile, ref_get(nocompile) + 1)
-            println("  no-compile ${label}  (occurrence ${i})")
+            println("  no-compile ${loc}  ${label}")
         }
     }
 }
 
 // Run one CODE operator (find->repl) across the whole SUT: for each of
 // its N code occurrences (string literals skipped), write that
-// single-site mutant and classify it.
+// single-site mutant and classify it, anchored to its source line.
 _run_operator(sut_path: string, original: string, find: string, repl: string,
               label: string, test_path: string, incl: string, bin: string,
               killed: ptr, survived: ptr, nocompile: ptr, survivors: ptr) {
+    base = _basename(sut_path)
     n = _count(original, find)
     i = 0
     while i < n {
         mutant = _replace_nth(original, find, repl, i)
         if string.length(mutant) > 0 {
+            line = _line_at(original, _offset_of_nth(original, find, i))
             fs.write(sut_path, mutant)
-            _classify(label, i, test_path, incl, bin, killed, survived, nocompile, survivors)
+            _classify("${base}:${line}", label, test_path, incl, bin, killed, survived, nocompile, survivors)
         }
         i = i + 1
     }
@@ -346,13 +428,15 @@ _run_string_operator(sut_path: string, original: string, want_empty: int,
                      content: string, label: string, test_path: string,
                      incl: string, bin: string, killed: ptr, survived: ptr,
                      nocompile: ptr, survivors: ptr) {
+    base = _basename(sut_path)
     n = _count_strings(original, want_empty)
     i = 0
     while i < n {
         mutant = _mutate_nth_string(original, i, want_empty, content)
         if string.length(mutant) > 0 {
+            line = _line_at(original, _offset_of_nth_string(original, i, want_empty))
             fs.write(sut_path, mutant)
-            _classify(label, i, test_path, incl, bin, killed, survived, nocompile, survivors)
+            _classify("${base}:${line}", label, test_path, incl, bin, killed, survived, nocompile, survivors)
         }
         i = i + 1
     }

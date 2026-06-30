@@ -64,17 +64,18 @@ Aeocha mutation testing
 
   baseline: suite passes on unmutated SUT ✓
 
-  killed     ADD->SUB  (occurrence 0)
-  killed     SUB->ADD  (occurrence 0)
-  killed     LT->GT  (occurrence 0)
+  killed     calc.ae:6  ADD->SUB
+  killed     calc.ae:9  SUB->ADD
+  killed     calc.ae:9  LT->GT
 
   3/3 mutants killed — mutation score 100%
 ```
 
 100% — every single-operator change to `calc.ae` was caught by `calc_test.ae`.
-Each line is one mutant: `ADD->SUB` flips the `+` in `add`, `SUB->ADD` flips the
-`0 - n` in `abs`, `LT->GT` flips the `n < 0` guard in `abs`. The suite asserts
-both branches of `abs` and an addition with a negative, so all three are killed.
+Each line is one mutant, anchored to its source location: `calc.ae:6 ADD->SUB`
+flips the `+` in `add`; `calc.ae:9 SUB->ADD` flips the `0 - n` in `abs`;
+`calc.ae:9 LT->GT` flips the `n < 0` guard. The suite asserts both branches of
+`abs` and an addition with a negative, so all three are killed.
 
 ### What a survivor looks like
 
@@ -83,14 +84,17 @@ case from `calc_test.ae` (the `abs(-7)` assertion), and the `SUB->ADD` mutant
 suddenly survives:
 
 ```
-  killed     ADD->SUB  (occurrence 0)
-  SURVIVED   SUB->ADD  (occurrence 0)
-  killed     LT->GT  (occurrence 0)
+  killed     calc.ae:6  ADD->SUB
+  SURVIVED   calc.ae:9  SUB->ADD
+  killed     calc.ae:9  LT->GT
 
   2/3 mutants killed — mutation score 66%
   1 survived (test gaps):
-    - SUB->ADD #0
+    - calc.ae:9  SUB->ADD
 ```
+
+The survivor line tells you exactly where to look — `calc.ae:9` — not just which
+operator.
 
 `SUB->ADD` flips the `0 - n` in `abs` to `0 + n` — which only changes the result
 for a *negative* input. With `abs(-7)` removed, nothing feeds `abs` a negative, so
@@ -125,9 +129,9 @@ String-literal mutators target the literal's *content* (quotes preserved):
 
 - **Mutation score** = killed / (killed + survived). Higher is better; 100% means
   every single-operator change that *compiled* was caught by some test.
-- **Survivors** are your to-do list: each one is a behaviour your tests don't
-  pin down. Either add a test that distinguishes it, or convince yourself it's
-  an *equivalent mutant* (see caveats).
+- **Survivors** are your to-do list: each one is reported as `file:line  MUTATION`
+  so you can jump straight to the unguarded code. Either add a test that
+  distinguishes it, or convince yourself it's an *equivalent mutant* (see caveats).
 - **No-compile** mutants (the mutation produced invalid code) are reported as
   `(N excluded — did not compile)` and left out of the denominator — they were
   never really tested, so they neither help nor hurt the score. With the core
