@@ -1,0 +1,19 @@
+// Sample SUT for the mutation-testing demo. Deliberately has a weakly
+// tested function (is_even) so some mutants survive — showing the tool
+// finds test GAPS, not just confirming a perfect suite.
+exports ( add, scale, is_even, in_range )
+
+add(a: int, b: int) -> int { return a + b }
+
+scale(a: int, b: int) -> int { return a * b }
+
+is_even(n: int) -> int {
+    // n % 2: 0 when even. The test below only checks is_even(4), which
+    // a `> ` mutation on the threshold wouldn't disturb — that's the
+    // intended surviving-mutant gap.
+    if n - (n / 2) * 2 == 0 { return 1 } else { return 0 }
+}
+
+in_range(n: int, lo: int, hi: int) -> int {
+    if n >= lo && n <= hi { return 1 } else { return 0 }
+}

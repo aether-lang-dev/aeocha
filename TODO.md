@@ -145,6 +145,20 @@ idiomatic-BDD shape. (Implementation term: the ambient cell described below.)
   `expect(x).to_equal(5)` and `within(5s).expect(resp).status(200)` are buildable
   once `fw` is ambient). See the new 3c for the fluent-facade item itself.
 
+## Adjacent tools
+
+6a. **[DONE]** Mutation testing — `contrib/mutate/mutate.ae`. An outer driver
+(Aether, dogfooding `fs` + `os_system`) that perturbs a SUT one padded-operator
+at a time, clears the cache, re-runs the Aeocha test, and uses the suite's exit
+code as the kill/survive oracle. Core ~6 operators (+/- , */ , compare flips,
+==/!=, &&/||). Reports a mutation score + lists survivors. Verified end-to-end on
+`contrib/mutate/example/` (ships a deliberate `&&`-survivor → 87%); SUT restored
+byte-identical (md5-checked). Honest Tier-1 limits documented in its README:
+text-based (false mutants possible), slow (cache-clear per mutant, no warm reuse),
+no equivalent-mutant detection, restores at end only (Ctrl-C mid-run leaves the
+SUT mutated — run on a clean tree). A precise version needs AST-level mutation
+upstream (`ae mutate` / `ae inspect` with positions).
+
 ## Matcher ergonomics (Hamcrest / AssertJ inspiration)
 
 5a. **[DONE]** Custom matchers documented + escape hatch. A matcher is just a fn

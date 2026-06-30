@@ -1,0 +1,218 @@
+// mutate.ae — a tiny mutation-testing driver for Aeocha-tested code.
+//
+// Mutation testing measures how good your TESTS are: it perturbs the
+// code under test (the "SUT") one change at a time and checks whether
+// the test suite NOTICES. A mutant the tests catch is "killed"; one
+// that slips through "survived" — a survivor marks a gap in the tests.
+//
+// This is an OUTER driver, deliberately. The compiler has already run
+// by the time any test executes, so mutation can't happen in-process —
+// it must edit the SUT *source on disk*, rebuild, and re-run the suite,
+// once per mutant. Aeocha is the oracle: `run_summary` exits non-zero
+// on failure, so a non-zero `ae run` of the test file means the mutant
+// was killed.
+//
+// Usage:
+//   ae run contrib/mutate/mutate.ae -- <sut.ae> <test.ae> [include_path]
+// (include_path defaults to the SUT's directory.)
+//
+// HONEST LIMITATIONS (Tier-1, text-based):
+//   - Operators are matched whitespace-padded (" + ", " > "), so `++`,
+//     `+=`, and most operators inside string/comment text are skipped —
+//     but a padded operator inside a string literal CAN be mutated
+//     (false mutant). Review survivors with that in mind.
+//   - No equivalent-mutant detection: a mutation that doesn't change
+//     behaviour (e.g. `<` -> `<=` on a boundary never hit) "survives"
+//     without being a real gap. Universal mutation-testing noise.
+//   - Each mutant pays a full cache-clear + recompile + run. No warm
+//     cache (the stale-cache rule forces the clear), so it's SLOW on
+//     big suites. Start with a focused SUT.
+
+import std.string
+import std.fs
+import std.list
+
+// os_system runs a shell command and returns its exit code. Raw extern
+// (std.os exports it); we want just the code, not captured output.
+extern os_system(cmd: string) -> int
+// Program args after the script name. argv0 / args surface.
+extern aether_args_count() -> int
+extern aether_args_get(i: int) -> string
+
+// ---------------------------------------------------------------------------
+// String helpers — mutate exactly the Nth occurrence of a token.
+// ---------------------------------------------------------------------------
+
+_count(src: string, find: string) -> int {
+    flen = string.length(find)
+    n = 0
+    pos = string.index_of_from(src, find, 0)
+    while pos >= 0 {
+        n = n + 1
+        pos = string.index_of_from(src, find, pos + flen)
+    }
+    return n
+}
+
+// Replace the n-th (0-based) occurrence of `find` with `repl`; "" if
+// there is no n-th occurrence.
+_replace_nth(src: string, find: string, repl: string, n: int) -> string {
+    slen = string.length(src)
+    flen = string.length(find)
+    k = 0
+    found = -1
+    pos = string.index_of_from(src, find, 0)
+    while pos >= 0 {
+        if k == n {
+            found = pos
+            pos = -1
+        } else {
+            k = k + 1
+            pos = string.index_of_from(src, find, pos + flen)
+        }
+    }
+    if found < 0 { return "" }
+    head = string.substring(src, 0, found)
+    tail = string.substring(src, found + flen, slen)
+    return "${head}${repl}${tail}"
+}
+
+// ---------------------------------------------------------------------------
+// Mutation operator table. Each entry is a (find, repl) pair of
+// whitespace-padded tokens. Order matters for multi-char operators:
+// we mutate ">=" / "<=" / "==" / "!=" as their own padded tokens so a
+// ">" rule never half-eats a ">=".
+// ---------------------------------------------------------------------------
+
+// Run one operator (find->repl) across the whole SUT: for each of its N
+// occurrences, build that single-site mutant, run the oracle, tally.
+// Returns "killed survived" counts via the refs passed in.
+_run_operator(sut_path: string, original: string, find: string, repl: string,
+              label: string, run_cmd: string, killed: ptr, survived: ptr,
+              survivors: ptr) {
+    n = _count(original, find)
+    i = 0
+    while i < n {
+        mutant = _replace_nth(original, find, repl, i)
+        if string.length(mutant) > 0 {
+            fs.write(sut_path, mutant)
+            code = os_system(run_cmd)
+            if code == 0 {
+                // suite still passed -> mutant SURVIVED (test gap)
+                ref_set(survived, ref_get(survived) + 1)
+                list.add(survivors, "${label} #${i}")
+                println("  SURVIVED  ${label}  (occurrence ${i})")
+            } else {
+                ref_set(killed, ref_get(killed) + 1)
+                println("  killed    ${label}  (occurrence ${i})")
+            }
+        }
+        i = i + 1
+    }
+}
+
+main() {
+    // Args. aether_args_get(0) is the binary path; user args start at 1.
+    // Convention: <sut.ae> <test.ae> [include_path].
+    ac = aether_args_count()
+    if ac < 3 {
+        println("usage: ae run mutate.ae -- <sut.ae> <test.ae> [include_path]")
+        return
+    }
+    sut_path = aether_args_get(1)
+    test_path = aether_args_get(2)
+    incl = ""
+    if ac >= 4 {
+        incl = aether_args_get(3)
+    } else {
+        // default include path = directory of the SUT
+        slash = string.index_of_from(sut_path, "/", 0)
+        last = -1
+        p = slash
+        while p >= 0 {
+            last = p
+            p = string.index_of_from(sut_path, "/", p + 1)
+        }
+        if last >= 0 {
+            incl = string.substring(sut_path, 0, last)
+        } else {
+            incl = "."
+        }
+    }
+
+    original, rerr = fs.read(sut_path)
+    if string.equals(rerr, "") == 0 {
+        println("error: could not read SUT '${sut_path}': ${rerr}")
+        return
+    }
+    if string.length(original) == 0 {
+        println("error: SUT '${sut_path}' is empty")
+        return
+    }
+
+    // The oracle command: clear the cache (mandatory — imported-module
+    // edits don't invalidate it), then run the test silently. Its exit
+    // code is the kill/survive signal.
+    run_cmd = "rm -rf ~/.aether/cache && AETHER_INCLUDE_PATH='${incl}' ae run '${test_path}' >/dev/null 2>&1"
+
+    // Sanity: the unmutated suite must PASS, or every mutant looks
+    // killed for the wrong reason.
+    println("Aeocha mutation testing")
+    println("  SUT:  ${sut_path}")
+    println("  test: ${test_path}")
+    println("")
+    baseline = os_system(run_cmd)
+    if baseline != 0 {
+        println("ABORT: the test suite does not pass on the unmutated SUT")
+        println("       (fix the suite first; mutation score is meaningless otherwise)")
+        fs.write(sut_path, original)
+        return
+    }
+    println("  baseline: suite passes on unmutated SUT ✓")
+    println("")
+
+    killed = ref(0)
+    survived = ref(0)
+    survivors = list.new()
+
+    // Core ~6 operators. Multi-char comparisons first so single-char
+    // rules can't partially match them.
+    _run_operator(sut_path, original, " >= ", " < ",  "GTE->LT",  run_cmd, killed, survived, survivors)
+    _run_operator(sut_path, original, " <= ", " > ",  "LTE->GT",  run_cmd, killed, survived, survivors)
+    _run_operator(sut_path, original, " == ", " != ", "EQ->NE",   run_cmd, killed, survived, survivors)
+    _run_operator(sut_path, original, " != ", " == ", "NE->EQ",   run_cmd, killed, survived, survivors)
+    _run_operator(sut_path, original, " + ",  " - ",  "ADD->SUB", run_cmd, killed, survived, survivors)
+    _run_operator(sut_path, original, " - ",  " + ",  "SUB->ADD", run_cmd, killed, survived, survivors)
+    _run_operator(sut_path, original, " * ",  " / ",  "MUL->DIV", run_cmd, killed, survived, survivors)
+    _run_operator(sut_path, original, " && ", " || ", "AND->OR",  run_cmd, killed, survived, survivors)
+    _run_operator(sut_path, original, " || ", " && ", "OR->AND",  run_cmd, killed, survived, survivors)
+    // Plain-`>` / plain-`<` last (after >= / <= consumed). These still
+    // can't see a bare `>` that abuts other chars, by design.
+    _run_operator(sut_path, original, " > ",  " < ",  "GT->LT",   run_cmd, killed, survived, survivors)
+    _run_operator(sut_path, original, " < ",  " > ",  "LT->GT",   run_cmd, killed, survived, survivors)
+
+    // Always restore the original — even though we wrote `original`
+    // after the last mutant via the loop, make it explicit.
+    fs.write(sut_path, original)
+
+    k = ref_get(killed)
+    s = ref_get(survived)
+    total = k + s
+    println("")
+    if total == 0 {
+        println("  no mutation sites found (no padded operators in the SUT)")
+        return
+    }
+    // Mutation score = killed / total, as a percentage (integer).
+    score = (k * 100) / total
+    println("  ${k}/${total} mutants killed — mutation score ${score}%")
+    if s > 0 {
+        println("  ${s} survived (test gaps):")
+        m = list.size(survivors)
+        j = 0
+        while j < m {
+            println("    - ${list.get_raw(survivors, j)}")
+            j = j + 1
+        }
+    }
+}
