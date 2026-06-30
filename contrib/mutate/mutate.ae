@@ -8,9 +8,13 @@
 // This is an OUTER driver, deliberately. The compiler has already run
 // by the time any test executes, so mutation can't happen in-process —
 // it must edit the SUT *source on disk*, rebuild, and re-run the suite,
-// once per mutant. Aeocha is the oracle: `run_summary` exits non-zero
-// on failure, so a non-zero `ae run` of the test file means the mutant
-// was killed.
+// once per mutant. Aeocha is the oracle, via its STRUCTURED report (not
+// just an exit code): the driver builds the test to a binary, runs it,
+// and drains the `version=1` report off the IPC channel, reading
+// `failed=N`. That lets it classify three outcomes — killed (a test
+// failed), survived (suite passed → a test gap), and no-compile (the
+// mutation produced invalid code, excluded from the score) — so a
+// non-compiling mutant never masquerades as a kill. See `_oracle`.
 //
 // Usage:
 //   ae run contrib/mutate/mutate.ae -- <sut.ae> <test.ae> [include_path]
@@ -31,6 +35,7 @@
 import std.string
 import std.fs
 import std.list
+import std.os
 
 // os_system runs a shell command and returns its exit code. Raw extern
 // (std.os exports it); we want just the code, not captured output.
@@ -38,6 +43,99 @@ extern os_system(cmd: string) -> int
 // Program args after the script name. argv0 / args surface.
 extern aether_args_count() -> int
 extern aether_args_get(i: int) -> string
+
+// Oracle classification codes.
+//   SURVIVED  — the mutant compiled and the suite still PASSED (a gap)
+//   KILLED    — the mutant compiled and the suite FAILED (good)
+//   NOCOMPILE — the mutant did not type-check (excluded from the score)
+const SURVIVED = 0
+const KILLED = 1
+const NOCOMPILE = 2
+
+// _oracle(test_path, incl, bin) classifies one already-written mutant by
+// running the Aeocha test against it. Three steps:
+//
+//   1. ae check — the no-compile gate. We gate on `check`, not `build`,
+//      because `ae build` currently accepts an entry program whose
+//      imported module fails to compile and links a stale/valid version
+//      (aether #953). `check` honestly reports the import error.
+//   2. ae build the test to a binary.
+//   3. run it via run_pipe_drain_and_wait, which inherits a parent IPC
+//      channel; Aeocha's run_summary emits a `version=1` report through
+//      it. We parse `failed=N` from the header: N>0 => KILLED, N==0 =>
+//      SURVIVED. This uses Aeocha's structured report rather than
+//      scraping stdout or trusting only an exit code.
+//
+// Cache is cleared first every time — an imported-module edit does not
+// invalidate ~/.aether/cache, so without this every mutant would be
+// tested against the previously compiled SUT.
+_oracle(test_path: string, incl: string, bin: string) -> int {
+    os_system("rm -rf ~/.aether/cache")
+
+    // (1) no-compile gate. We gate on the PRESENCE OF `error[` IN OUTPUT,
+    // not the exit code: on this compiler both `ae check` and `ae build`
+    // return exit 0 even when an imported module fails to compile — they
+    // print the diagnostic to stderr but don't fail (aether #953). So we
+    // grep stderr for an `error[` diagnostic; grep -q exits 0 when it
+    // finds one, which means the mutant does NOT compile.
+    chk = "AETHER_INCLUDE_PATH='${incl}' ae check '${test_path}' 2>&1 | grep -q 'error\\['"
+    if os_system(chk) == 0 {
+        return NOCOMPILE
+    }
+
+    // (2) build to a fresh binary (exit code is unreliable too; we rely
+    // on the check gate above and on whether a runnable binary appears).
+    os_system("rm -f '${bin}'")
+    bld = "AETHER_INCLUDE_PATH='${incl}' ae build '${test_path}' -o '${bin}' >/dev/null 2>&1"
+    os_system(bld)
+    if os_system("test -x '${bin}'") != 0 {
+        return NOCOMPILE
+    }
+
+    // (3) run + drain the structured report. We spawn the binary
+    // through `/bin/sh -c "exec <bin> >/dev/null 2>&1"` so the child's
+    // own ✓/✗ test output is silenced — the report still arrives on the
+    // inherited IPC channel (fd 3), which the redirect leaves untouched.
+    // Without this, every mutant's full Aeocha run would print to our
+    // terminal.
+    argv = list.new()
+    list.add(argv, "-c")
+    list.add(argv, "exec '${bin}' >/dev/null 2>&1")
+    report, _, drain_err = os.run_pipe_drain_and_wait("/bin/sh", argv, null)
+    if string.equals(drain_err, "") == 0 {
+        return NOCOMPILE
+    }
+    failed = _report_failed(report)
+    if failed > 0 { return KILLED }
+    return SURVIVED
+}
+
+// Parse `failed=N` from a version=1 report header. Returns -1 if absent
+// (treated by callers as "no usable report").
+_report_failed(report: string) -> int {
+    key = "failed="
+    pos = string.index_of_from(report, key, 0)
+    if pos < 0 { return -1 }
+    start = pos + string.length(key)
+    rlen = string.length(report)
+    // read digits until newline
+    end = start
+    scanning = 1
+    while scanning == 1 {
+        if end >= rlen {
+            scanning = 0
+        } else {
+            c = string.char_at_n(report, rlen, end)
+            if c >= 48 && c <= 57 {
+                end = end + 1
+            } else {
+                scanning = 0
+            }
+        }
+    }
+    if end == start { return -1 }
+    return string.get_int(string.substring(report, start, end))
+}
 
 // ---------------------------------------------------------------------------
 // String helpers — mutate exactly the Nth occurrence of a token.
@@ -85,26 +183,34 @@ _replace_nth(src: string, find: string, repl: string, n: int) -> string {
 // ---------------------------------------------------------------------------
 
 // Run one operator (find->repl) across the whole SUT: for each of its N
-// occurrences, build that single-site mutant, run the oracle, tally.
-// Returns "killed survived" counts via the refs passed in.
+// occurrences, write that single-site mutant and classify it via the
+// structured-report oracle. Tallies killed / survived / nocompile via
+// the refs passed in; survivors are also appended to the list.
 _run_operator(sut_path: string, original: string, find: string, repl: string,
-              label: string, run_cmd: string, killed: ptr, survived: ptr,
-              survivors: ptr) {
+              label: string, test_path: string, incl: string, bin: string,
+              killed: ptr, survived: ptr, nocompile: ptr, survivors: ptr) {
     n = _count(original, find)
     i = 0
     while i < n {
         mutant = _replace_nth(original, find, repl, i)
         if string.length(mutant) > 0 {
             fs.write(sut_path, mutant)
-            code = os_system(run_cmd)
-            if code == 0 {
-                // suite still passed -> mutant SURVIVED (test gap)
+            verdict = _oracle(test_path, incl, bin)
+            if verdict == SURVIVED {
                 ref_set(survived, ref_get(survived) + 1)
                 list.add(survivors, "${label} #${i}")
-                println("  SURVIVED  ${label}  (occurrence ${i})")
+                println("  SURVIVED   ${label}  (occurrence ${i})")
             } else {
-                ref_set(killed, ref_get(killed) + 1)
-                println("  killed    ${label}  (occurrence ${i})")
+                if verdict == KILLED {
+                    ref_set(killed, ref_get(killed) + 1)
+                    println("  killed     ${label}  (occurrence ${i})")
+                } else {
+                    // NOCOMPILE — the mutation produced invalid code.
+                    // Excluded from the score (it was never really
+                    // tested), but reported so the count is honest.
+                    ref_set(nocompile, ref_get(nocompile) + 1)
+                    println("  no-compile ${label}  (occurrence ${i})")
+                }
             }
         }
         i = i + 1
@@ -150,21 +256,24 @@ main() {
         return
     }
 
-    // The oracle command: clear the cache (mandatory — imported-module
-    // edits don't invalidate it), then run the test silently. Its exit
-    // code is the kill/survive signal.
-    run_cmd = "rm -rf ~/.aether/cache && AETHER_INCLUDE_PATH='${incl}' ae run '${test_path}' >/dev/null 2>&1"
+    // A temp binary path for the per-mutant build+drain oracle.
+    bin = "/tmp/aeocha_mutate_probe"
 
-    // Sanity: the unmutated suite must PASS, or every mutant looks
-    // killed for the wrong reason.
     println("Aeocha mutation testing")
     println("  SUT:  ${sut_path}")
     println("  test: ${test_path}")
     println("")
-    baseline = os_system(run_cmd)
-    if baseline != 0 {
-        println("ABORT: the test suite does not pass on the unmutated SUT")
-        println("       (fix the suite first; mutation score is meaningless otherwise)")
+
+    // Sanity: the unmutated suite must PASS (KILLED would mean it's
+    // already failing; NOCOMPILE means the test doesn't build).
+    baseline = _oracle(test_path, incl, bin)
+    if baseline != SURVIVED {
+        if baseline == NOCOMPILE {
+            println("ABORT: the unmutated test does not compile (check include path / SUT)")
+        } else {
+            println("ABORT: the test suite does not pass on the unmutated SUT")
+            println("       (fix the suite first; mutation score is meaningless otherwise)")
+        }
         fs.write(sut_path, original)
         return
     }
@@ -173,39 +282,52 @@ main() {
 
     killed = ref(0)
     survived = ref(0)
+    nocompile = ref(0)
     survivors = list.new()
 
     // Core ~6 operators. Multi-char comparisons first so single-char
     // rules can't partially match them.
-    _run_operator(sut_path, original, " >= ", " < ",  "GTE->LT",  run_cmd, killed, survived, survivors)
-    _run_operator(sut_path, original, " <= ", " > ",  "LTE->GT",  run_cmd, killed, survived, survivors)
-    _run_operator(sut_path, original, " == ", " != ", "EQ->NE",   run_cmd, killed, survived, survivors)
-    _run_operator(sut_path, original, " != ", " == ", "NE->EQ",   run_cmd, killed, survived, survivors)
-    _run_operator(sut_path, original, " + ",  " - ",  "ADD->SUB", run_cmd, killed, survived, survivors)
-    _run_operator(sut_path, original, " - ",  " + ",  "SUB->ADD", run_cmd, killed, survived, survivors)
-    _run_operator(sut_path, original, " * ",  " / ",  "MUL->DIV", run_cmd, killed, survived, survivors)
-    _run_operator(sut_path, original, " && ", " || ", "AND->OR",  run_cmd, killed, survived, survivors)
-    _run_operator(sut_path, original, " || ", " && ", "OR->AND",  run_cmd, killed, survived, survivors)
+    _run_operator(sut_path, original, " >= ", " < ",  "GTE->LT",  test_path, incl, bin, killed, survived, nocompile, survivors)
+    _run_operator(sut_path, original, " <= ", " > ",  "LTE->GT",  test_path, incl, bin, killed, survived, nocompile, survivors)
+    _run_operator(sut_path, original, " == ", " != ", "EQ->NE",   test_path, incl, bin, killed, survived, nocompile, survivors)
+    _run_operator(sut_path, original, " != ", " == ", "NE->EQ",   test_path, incl, bin, killed, survived, nocompile, survivors)
+    _run_operator(sut_path, original, " + ",  " - ",  "ADD->SUB", test_path, incl, bin, killed, survived, nocompile, survivors)
+    _run_operator(sut_path, original, " - ",  " + ",  "SUB->ADD", test_path, incl, bin, killed, survived, nocompile, survivors)
+    _run_operator(sut_path, original, " * ",  " / ",  "MUL->DIV", test_path, incl, bin, killed, survived, nocompile, survivors)
+    _run_operator(sut_path, original, " && ", " || ", "AND->OR",  test_path, incl, bin, killed, survived, nocompile, survivors)
+    _run_operator(sut_path, original, " || ", " && ", "OR->AND",  test_path, incl, bin, killed, survived, nocompile, survivors)
     // Plain-`>` / plain-`<` last (after >= / <= consumed). These still
     // can't see a bare `>` that abuts other chars, by design.
-    _run_operator(sut_path, original, " > ",  " < ",  "GT->LT",   run_cmd, killed, survived, survivors)
-    _run_operator(sut_path, original, " < ",  " > ",  "LT->GT",   run_cmd, killed, survived, survivors)
+    _run_operator(sut_path, original, " > ",  " < ",  "GT->LT",   test_path, incl, bin, killed, survived, nocompile, survivors)
+    _run_operator(sut_path, original, " < ",  " > ",  "LT->GT",   test_path, incl, bin, killed, survived, nocompile, survivors)
 
     // Always restore the original — even though we wrote `original`
     // after the last mutant via the loop, make it explicit.
     fs.write(sut_path, original)
+    os_system("rm -f '${bin}'")
 
     k = ref_get(killed)
     s = ref_get(survived)
-    total = k + s
+    nc = ref_get(nocompile)
+    // The score denominator is COMPILING mutants only — a mutant that
+    // doesn't type-check was never really tested, so counting it as a
+    // kill would flatter the score (and counting it as a survivor would
+    // be a false gap). Report it separately.
+    scored = k + s
     println("")
-    if total == 0 {
-        println("  no mutation sites found (no padded operators in the SUT)")
+    if scored == 0 {
+        if nc > 0 {
+            println("  no scorable mutants (${nc} did not compile)")
+        } else {
+            println("  no mutation sites found (no padded operators in the SUT)")
+        }
         return
     }
-    // Mutation score = killed / total, as a percentage (integer).
-    score = (k * 100) / total
-    println("  ${k}/${total} mutants killed — mutation score ${score}%")
+    score = (k * 100) / scored
+    println("  ${k}/${scored} mutants killed — mutation score ${score}%")
+    if nc > 0 {
+        println("  (${nc} excluded — did not compile)")
+    }
     if s > 0 {
         println("  ${s} survived (test gaps):")
         m = list.size(survivors)

@@ -14,14 +14,26 @@ so a non-zero `ae run` of your test file means the mutant was killed.
 
 The compiler has already run by the time any test executes, so a mutant can't be
 produced in-process — there's no source or AST left to perturb, only compiled
-machine code. Mutation therefore has to:
+machine code. Mutation therefore has to, once per mutant:
 
-1. edit the SUT **source on disk**,
-2. clear the build cache and **rebuild**,
-3. **re-run** the (unchanged) test suite and read its exit code,
+1. edit the SUT **source on disk** and clear the build cache,
+2. **`ae check`** the test — if the mutant doesn't type-check, it's *no-compile*
+   (excluded from the score; a mutant that won't build was never really tested),
+3. **`ae build`** the test to a binary and run it, **draining Aeocha's structured
+   report** off the IPC channel rather than scraping stdout. The report's
+   `failed=N` is the verdict: `N > 0` → killed, `N == 0` → survived.
 
-once per mutant. `mutate.ae` is that outer loop. Your test file is completely
-unaware mutation is happening.
+`mutate.ae` is that outer loop; your test file is completely unaware mutation is
+happening. Using the structured report (not just a process exit code) is what lets
+the tool tell *killed* (a test actually failed) apart from *no-compile* (the
+mutation produced invalid code) — so a non-compiling mutant never inflates the
+score by masquerading as a kill.
+
+> Compiler note: the no-compile gate greps `ae check`'s output for an `error[`
+> diagnostic rather than trusting its exit code. On the current `ae`, both
+> `ae check` and `ae build` can print a compile error to stderr yet still exit 0
+> (and `build` will even emit a binary linked against a stale module) — see
+> aether #953. Grepping the diagnostic is the reliable signal until that's fixed.
 
 ## Usage
 
@@ -52,9 +64,9 @@ Aeocha mutation testing
 
   baseline: suite passes on unmutated SUT ✓
 
-  killed    ADD->SUB  (occurrence 0)
-  killed    SUB->ADD  (occurrence 0)
-  killed    LT->GT  (occurrence 0)
+  killed     ADD->SUB  (occurrence 0)
+  killed     SUB->ADD  (occurrence 0)
+  killed     LT->GT  (occurrence 0)
 
   3/3 mutants killed — mutation score 100%
 ```
@@ -71,9 +83,9 @@ case from `calc_test.ae` (the `abs(-7)` assertion), and the `SUB->ADD` mutant
 suddenly survives:
 
 ```
-  killed    ADD->SUB  (occurrence 0)
-  SURVIVED  SUB->ADD  (occurrence 0)
-  killed    LT->GT  (occurrence 0)
+  killed     ADD->SUB  (occurrence 0)
+  SURVIVED   SUB->ADD  (occurrence 0)
+  killed     LT->GT  (occurrence 0)
 
   2/3 mutants killed — mutation score 66%
   1 survived (test gaps):
@@ -102,11 +114,16 @@ spacing is required for a site to be seen:
 
 ## Reading the result
 
-- **Mutation score** = killed / total. Higher is better; 100% means every
-  single-operator change to the SUT was caught by some test.
+- **Mutation score** = killed / (killed + survived). Higher is better; 100% means
+  every single-operator change that *compiled* was caught by some test.
 - **Survivors** are your to-do list: each one is a behaviour your tests don't
   pin down. Either add a test that distinguishes it, or convince yourself it's
   an *equivalent mutant* (see caveats).
+- **No-compile** mutants (the mutation produced invalid code) are reported as
+  `(N excluded — did not compile)` and left out of the denominator — they were
+  never really tested, so they neither help nor hurt the score. With the core
+  operator set they're rare (most operator swaps stay valid), but the category
+  keeps the score honest when they happen.
 
 ## Honest limitations
 
@@ -119,9 +136,10 @@ This is a Tier-1, text-based tool. Know what it does and doesn't do:
 - **Equivalent mutants.** Some changes don't alter behaviour (e.g. `<` → `<=` on
   a boundary your code never reaches). They "survive" without being real gaps.
   This is inherent to mutation testing, not a bug here.
-- **Slow.** Every mutant pays a full cache-clear + recompile + run — there's no
-  warm-cache reuse (the cache-clear is mandatory, or you'd test a stale build).
-  Point it at a focused SUT, not your whole codebase.
+- **Slow.** Every mutant pays a cache-clear + `ae check` + `ae build` + run — and
+  the cache-clear is mandatory (an imported-module edit doesn't invalidate the
+  cache, so you'd otherwise test a stale build). Three compiler invocations per
+  mutant, no warm-cache reuse — point it at a focused SUT, not your whole codebase.
 - **Crash safety.** `mutate.ae` restores the original SUT at the end of the run
   (verified byte-identical). But it mutates the real file in place, so if the
   driver is killed mid-run (Ctrl-C, OOM), the SUT is left mutated — recover with

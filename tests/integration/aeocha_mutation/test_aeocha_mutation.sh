@@ -75,9 +75,10 @@ grep -q "baseline: suite passes" "$TMPDIR/out.log" || fail "no baseline-pass lin
 grep -q "1/2 mutants killed — mutation score 50%" "$TMPDIR/out.log" \
     || fail "unexpected mutation score (wanted 1/2, 50%)"
 
-# Property 3: the known survivor is reported.
-grep -q "SURVIVED  MUL->DIV" "$TMPDIR/out.log" || fail "MUL->DIV survivor not reported"
-grep -q "killed    ADD->SUB" "$TMPDIR/out.log" || fail "ADD->SUB not killed"
+# Property 3: the known survivor and kill are reported. Whitespace-tolerant
+# (the verdict column padding is cosmetic and has changed before).
+grep -Eq "SURVIVED +MUL->DIV" "$TMPDIR/out.log" || fail "MUL->DIV survivor not reported"
+grep -Eq "killed +ADD->SUB"   "$TMPDIR/out.log" || fail "ADD->SUB not killed"
 
 echo "  [PASS] aeocha_mutation"
 exit 0
