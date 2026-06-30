@@ -157,7 +157,10 @@ byte-identical (md5-checked). Honest Tier-1 limits documented in its README:
 text-based (false mutants possible), slow (cache-clear per mutant, no warm reuse),
 no equivalent-mutant detection, restores at end only (Ctrl-C mid-run leaves the
 SUT mutated — run on a clean tree). A precise version needs AST-level mutation
-upstream (`ae mutate` / `ae inspect` with positions).
+upstream (`ae mutate` / `ae inspect` with positions). Regression:
+`tests/integration/aeocha_mutation/` runs the driver against a deterministic
+fixture and asserts the exact score + survivor + byte-identical SUT restore
+(verified to fail when restore is broken).
 
 ## Matcher ergonomics (Hamcrest / AssertJ inspiration)
 
