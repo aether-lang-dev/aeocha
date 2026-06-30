@@ -1,10 +1,6 @@
-// Aeocha test for calc.ae — an ordinary test file, completely unaware
-// that mutation testing exists. The mutation driver edits calc.ae on
-// disk and re-runs THIS unchanged file; its exit code is the oracle.
-//
-// Coverage is intentionally uneven: add/scale/in_range are checked,
-// is_even is barely checked — so the mutation run should report
-// survivors against is_even.
+// The Aeocha test for calc.ae — identical to the top-level README's
+// Quick Start. The mutation driver edits calc.ae on disk and re-runs
+// THIS unchanged file once per mutant; its exit code is the oracle.
 import aeocha
 import calc
 
@@ -13,25 +9,21 @@ extern exit(code: int)
 main() {
     fw = aeocha.init()
 
-    aeocha.describe(fw, "calc") {
-        aeocha.it("add") callback {
-            aeocha.assert_eq(calc.add(2, 3), 5, "2+3")
-            aeocha.assert_eq(calc.add(10, 1), 11, "10+1")
+    aeocha.describe(fw, "calc.add") {
+        aeocha.it("adds two positives") callback {
+            aeocha.assert_eq(calc.add(2, 3), 5, "2 + 3")
         }
-        aeocha.it("scale") callback {
-            aeocha.assert_eq(calc.scale(4, 5), 20, "4*5")
+        aeocha.it("adds with a negative") callback {
+            aeocha.assert_eq(calc.add(10, -4), 6, "10 + (-4)")
         }
-        // DELIBERATELY WEAK: only the in-range case is checked, never a
-        // value below `lo` or above `hi`. So mutating `&&` -> `||` in
-        // in_range still passes these assertions — a surviving mutant
-        // the run will flag. Add the boundary cases (in_range(0,...) == 0,
-        // in_range(11,...) == 0) and the survivor disappears. That's the
-        // whole point of mutation testing: it finds the missing cases.
-        aeocha.it("in_range (weak — no boundary cases)") callback {
-            aeocha.assert_eq(calc.in_range(5, 1, 10), 1, "5 in [1,10]")
+    }
+
+    aeocha.describe(fw, "calc.abs") {
+        aeocha.it("leaves positives unchanged") callback {
+            aeocha.assert_eq(calc.abs(7), 7, "abs(7)")
         }
-        aeocha.it("is_even") callback {
-            aeocha.assert_eq(calc.is_even(4), 1, "4 is even")
+        aeocha.it("flips negatives") callback {
+            aeocha.assert_eq(calc.abs(-7), 7, "abs(-7)")
         }
     }
 

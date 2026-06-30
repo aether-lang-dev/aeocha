@@ -41,7 +41,9 @@ ae run contrib/mutate/mutate.ae -- \
     "$PWD"
 ```
 
-Output:
+`contrib/mutate/example/` is the **same `calc`** as the top-level README's Quick
+Start — `calc.ae` (the code under test) plus `calc_test.ae` (the Aeocha suite).
+Mutation testing asks how well that suite tests that code. Output:
 
 ```
 Aeocha mutation testing
@@ -50,24 +52,40 @@ Aeocha mutation testing
 
   baseline: suite passes on unmutated SUT ✓
 
-  killed    GTE->LT  (occurrence 0)
-  killed    LTE->GT  (occurrence 0)
-  killed    EQ->NE  (occurrence 0)
   killed    ADD->SUB  (occurrence 0)
   killed    SUB->ADD  (occurrence 0)
-  killed    MUL->DIV  (occurrence 0)
-  killed    MUL->DIV  (occurrence 1)
-  SURVIVED  AND->OR  (occurrence 0)
+  killed    LT->GT  (occurrence 0)
 
-  7/8 mutants killed — mutation score 87%
-  1 survived (test gaps):
-    - AND->OR #0
+  3/3 mutants killed — mutation score 100%
 ```
 
-The surviving `AND->OR` is real: the example's `in_range` test only checks an
-*in-range* value, never one below `lo` or above `hi`, so flipping `&&` to `||`
-still passes. Add the boundary cases and it gets killed — that's the tool doing
-its job. (The example test ships with that gap on purpose.)
+100% — every single-operator change to `calc.ae` was caught by `calc_test.ae`.
+Each line is one mutant: `ADD->SUB` flips the `+` in `add`, `SUB->ADD` flips the
+`0 - n` in `abs`, `LT->GT` flips the `n < 0` guard in `abs`. The suite asserts
+both branches of `abs` and an addition with a negative, so all three are killed.
+
+### What a survivor looks like
+
+A survivor is the interesting case — it's a *test gap*. Delete the negative-input
+case from `calc_test.ae` (the `abs(-7)` assertion), and the `SUB->ADD` mutant
+suddenly survives:
+
+```
+  killed    ADD->SUB  (occurrence 0)
+  SURVIVED  SUB->ADD  (occurrence 0)
+  killed    LT->GT  (occurrence 0)
+
+  2/3 mutants killed — mutation score 66%
+  1 survived (test gaps):
+    - SUB->ADD #0
+```
+
+`SUB->ADD` flips the `0 - n` in `abs` to `0 + n` — which only changes the result
+for a *negative* input. With `abs(-7)` removed, nothing feeds `abs` a negative, so
+the mutant goes unnoticed. (Note `LT->GT` is still killed: flipping the `n < 0`
+guard sends the positive `abs(7)` down the negation branch, and that case is still
+tested.) Add the negative-input assertion back and `SUB->ADD` returns to killed.
+That is the whole point — survivors are your missing tests.
 
 ## Mutation operators (core set)
 
