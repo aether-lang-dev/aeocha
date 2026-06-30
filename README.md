@@ -17,20 +17,46 @@ cd aeocha
 
 ## Quick Start
 
-Save this as `my_test.ae`:
+A test framework tests *your code*. So a real example is two files: the code
+under test, and a test that imports and calls it.
+
+**`calc.ae`** — the code under test:
+
+```aether
+exports ( add, abs )
+
+add(a: int, b: int) -> int { return a + b }
+
+abs(n: int) -> int {
+    if n < 0 { return 0 - n } else { return n }
+}
+```
+
+**`calc_test.ae`** — the test, which imports `calc` and asserts on what its
+functions return:
 
 ```aether
 import aeocha
+import calc
 
 main() {
     fw = aeocha.init()                       // start a test run
 
-    aeocha.describe(fw, "Math") {            // group of related tests
-        aeocha.it("adds correctly") callback {
-            aeocha.assert_eq(1 + 1, 2, "one plus one")
+    aeocha.describe(fw, "calc.add") {        // group of related tests
+        aeocha.it("adds two positives") callback {
+            aeocha.assert_eq(calc.add(2, 3), 5, "2 + 3")
         }
-        aeocha.it("subtracts correctly") callback {
-            aeocha.assert_eq(5 - 3, 2, "five minus three")
+        aeocha.it("adds with a negative") callback {
+            aeocha.assert_eq(calc.add(10, -4), 6, "10 + (-4)")
+        }
+    }
+
+    aeocha.describe(fw, "calc.abs") {
+        aeocha.it("leaves positives unchanged") callback {
+            aeocha.assert_eq(calc.abs(7), 7, "abs(7)")
+        }
+        aeocha.it("flips negatives") callback {
+            aeocha.assert_eq(calc.abs(-7), 7, "abs(-7)")
         }
     }
 
@@ -38,28 +64,36 @@ main() {
 }
 ```
 
-Run it (point `AETHER_INCLUDE_PATH` at wherever `aeocha.ae` lives):
+Run it (point `AETHER_INCLUDE_PATH` at the directory holding `aeocha.ae`;
+`calc.ae` is found next to the test):
 
 ```bash
-AETHER_INCLUDE_PATH=. ae run my_test.ae
+AETHER_INCLUDE_PATH=. ae run calc_test.ae
 ```
 
 ```
-Math
-  ✓ adds correctly
-  ✓ subtracts correctly
+calc.add
+    ✓ adds two positives
+    ✓ adds with a negative
+  calc.abs
+      ✓ leaves positives unchanged
+      ✓ flips negatives
 
-  2 passing
+  4 passing
 ```
 
 Exit code is `0` when everything passes, `1` if anything fails.
 
 ### Reading the example, top to bottom
 
+- **`import calc`** — the code under test is an ordinary module; the test imports
+  it and calls its functions, asserting on the results. (The assertions check
+  `calc.add(...)` / `calc.abs(...)`, not bare literals — you're testing *your
+  code*, not arithmetic.)
 - **`fw = aeocha.init()`** — creates the test-run context. You capture it once
   and pass it only to the two *structural* calls: the top-level `describe` and
-  `run_summary`. (You don't pass it to assertions — see the next point.)
-- **`aeocha.describe(fw, "Math") { ... }`** — a group. The `{ ... }` is a
+  `run_summary`. (You don't pass it to assertions — see below.)
+- **`aeocha.describe(fw, "calc.add") { ... }`** — a group. The `{ ... }` is a
   *trailing block*: everything inside runs in the group's context. Nested
   `describe`/`it`/hooks **omit** the `fw` argument — Aether injects the context
   automatically.
