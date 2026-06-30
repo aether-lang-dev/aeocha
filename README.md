@@ -17,23 +17,84 @@ cd aeocha
 
 ## Quick Start
 
+Save this as `my_test.ae`:
+
 ```aether
-import aeocha (*)
+import aeocha
 
 main() {
-    fw = init()
+    fw = aeocha.init()                       // start a test run
 
-    describe(fw, "Math") {
-        it(fw, "adds correctly") callback {
-            assert_eq(fw, 1 + 1, 2, "math")
+    aeocha.describe(fw, "Math") {            // group of related tests
+        aeocha.it("adds correctly") callback {
+            aeocha.assert_eq(1 + 1, 2, "one plus one")
+        }
+        aeocha.it("subtracts correctly") callback {
+            aeocha.assert_eq(5 - 3, 2, "five minus three")
         }
     }
 
-    run_summary(fw)
+    aeocha.run_summary(fw)                    // print results, exit 0/1
 }
 ```
 
-Run with `ae run my_test.ae`. Exit code `0` on success, `1` on failure.
+Run it (point `AETHER_INCLUDE_PATH` at wherever `aeocha.ae` lives):
+
+```bash
+AETHER_INCLUDE_PATH=. ae run my_test.ae
+```
+
+```
+Math
+  ✓ adds correctly
+  ✓ subtracts correctly
+
+  2 passing
+```
+
+Exit code is `0` when everything passes, `1` if anything fails.
+
+### Reading the example, top to bottom
+
+- **`fw = aeocha.init()`** — creates the test-run context. You capture it once
+  and pass it only to the two *structural* calls: the top-level `describe` and
+  `run_summary`. (You don't pass it to assertions — see the next point.)
+- **`aeocha.describe(fw, "Math") { ... }`** — a group. The `{ ... }` is a
+  *trailing block*: everything inside runs in the group's context. Nested
+  `describe`/`it`/hooks **omit** the `fw` argument — Aether injects the context
+  automatically.
+- **`aeocha.it("...") callback { ... }`** — one test case. The `callback { ... }`
+  body holds your assertions.
+- **`aeocha.assert_eq(actual, expected, msg)`** — an assertion. **No `fw`** —
+  matchers report against the run `init()` started. A failed assertion records
+  the failure and *keeps going* (so you see every problem in a run, not just the
+  first), and turns the surrounding `it` red.
+- **`aeocha.run_summary(fw)`** — prints the pass/fail summary and exits `0`/`1`.
+
+### Hooks
+
+`before_each` / `after_each` run around every `it` in their group (omit `fw`):
+
+```aether
+aeocha.describe(fw, "Counter") {
+    aeocha.before_each() callback { reset() }
+
+    aeocha.it("starts at zero") callback {
+        aeocha.assert_eq(count(), 0, "fresh counter")
+    }
+}
+```
+
+### Prefer unqualified calls?
+
+`import aeocha (*)` brings every name into scope so you can drop the `aeocha.`
+prefix (`init()`, `describe(fw, ...)`, `assert_eq(...)`). The qualified form
+(`import aeocha`) is used throughout this README to make it obvious what comes
+from the framework.
+
+> Requires `ae` **v0.331+**. If you edit `aeocha.ae` itself, run
+> `rm -rf ~/.aether/cache` first — the compiler cache doesn't notice changes in
+> imported modules and will silently run the old version.
 
 ## Features
 
