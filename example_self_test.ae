@@ -31,6 +31,13 @@ import std.list
 // it() closure (the eventually() predicate-fn path).
 always_ready() -> int { return 1 }
 
+// Returns a FRESHLY-BUILT (interpolated, heap-allocated) string — freed
+// after the call returns. Used to guard against the expect_str
+// use-after-free: expect_str must COPY its argument, or the subject
+// would hold a dangling pointer to this temporary by the time
+// .to_equal_str runs. (Regression for aeo's aeocha-expect-str-uaf ask.)
+built_path(dir: string) -> string { return "${dir}/vmlinux" }
+
 // 1-arg predicate for the satisfies() escape hatch: takes the subject
 // value, returns 1/0.
 is_positive(n: int) -> int { if n > 0 { return 1 } else { return 0 } }
@@ -103,6 +110,14 @@ main() {
 
             aeocha.it("chains string matchers") callback {
                 aeocha.expect_str("hello world").to_equal_str("hello world").to_contain("world").to_start_with("hello")
+            }
+
+            // Regression: expect_str on a freshly-built string. The built
+            // string is freed after built_path() returns, so if
+            // expect_str stored it by reference the subject would read
+            // garbage here. expect_str copies, so this holds.
+            aeocha.it("expect_str copies a freshly-built string (no UAF)") callback {
+                aeocha.expect_str(built_path("/srv/mvm")).to_equal_str("/srv/mvm/vmlinux")
             }
         }
 

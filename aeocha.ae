@@ -1211,7 +1211,17 @@ struct IntSubject { value: int, negated: int }
 struct StrSubject { value: string, negated: int }
 
 expect_int(v: int) -> IntSubject { return IntSubject { value: v, negated: 0 } }
-expect_str(v: string) -> StrSubject { return StrSubject { value: v, negated: 0 } }
+
+// expect_str COPIES v into the subject. The fluent chain outlives the
+// expect_str() call, so a caller-owned temporary — e.g. the freshly
+// built string returned by `expect_str(build_path(...))` — would be
+// freed before .to_equal_str() runs, and StrSubject.value would dangle
+// (a use-after-free that reads garbage). string.copy takes an owned
+// snapshot so the subject holds its own string end-to-end. int is
+// value-copied so expect_int needs no such guard. The copy lives until
+// process exit (one small string per expect_str, bounded by test count
+// — same lifetime policy as the rest of Aeocha's per-it allocations).
+expect_str(v: string) -> StrSubject { return StrSubject { value: string.copy(v), negated: 0 } }
 
 // not_() — flip the sense of the NEXT matcher in the chain.
 not_(s: IntSubject) -> IntSubject {
