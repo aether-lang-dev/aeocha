@@ -49,7 +49,9 @@ fail() {
 SUT_BEFORE="$($MD5 "$SUT" | awk '{print $1}')"
 
 rm -rf "$HOME/.aether/cache"
-if ! AETHER_INCLUDE_PATH="$ROOT" "$AE" run "$ROOT/contrib/mutate/mutate.ae" -- \
+# aeocha resolves via the lib_dir arg ("$ROOT") the driver turns into
+# AETHER_LIB_DIR for its sub-builds; no env var needed on this outer run.
+if ! "$AE" run "$ROOT/contrib/mutate/mutate.ae" -- \
         "$SUT" "$TEST" "$ROOT" >"$TMPDIR/out.log" 2>&1; then
     fail "driver exited non-zero"
 fi

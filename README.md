@@ -64,11 +64,19 @@ main() {
 }
 ```
 
-Run it (point `AETHER_INCLUDE_PATH` at the directory holding `aeocha.ae`;
-`calc.ae` is found next to the test):
+Run it. `ae` resolves a bare `import aeocha` from the current directory, so
+running from the directory that holds `aeocha.ae` just works (`calc.ae` is
+found next to the test):
 
 ```bash
-AETHER_INCLUDE_PATH=. ae run calc_test.ae
+ae run calc_test.ae
+```
+
+To run from anywhere else, point `AETHER_LIB_DIR` at the directory holding
+`aeocha.ae` (a PATH-style list of module search dirs, same shape as `--lib`):
+
+```bash
+AETHER_LIB_DIR=/path/to/aeocha ae run calc_test.ae
 ```
 
 ```

@@ -59,7 +59,9 @@ const KILLED = 1
 const NOCOMPILE = 2
 
 // _oracle(test_path, incl, bin) classifies one already-written mutant by
-// running the Aeocha test against it. Three steps:
+// running the Aeocha test against it. `incl` is a module search dir passed
+// as AETHER_LIB_DIR to the sub-`ae check`/`ae build` (must hold aeocha.ae).
+// Three steps:
 //
 //   1. ae check — the no-compile gate. We gate on `check`, not `build`,
 //      because `ae build` currently accepts an entry program whose
@@ -84,7 +86,7 @@ _oracle(test_path: string, incl: string, bin: string) -> int {
     // print the diagnostic to stderr but don't fail (aether #953). So we
     // grep stderr for an `error[` diagnostic; grep -q exits 0 when it
     // finds one, which means the mutant does NOT compile.
-    chk = "AETHER_INCLUDE_PATH='${incl}' ae check '${test_path}' 2>&1 | grep -q 'error\\['"
+    chk = "AETHER_LIB_DIR='${incl}' ae check '${test_path}' 2>&1 | grep -q 'error\\['"
     if os_system(chk) == 0 {
         return NOCOMPILE
     }
@@ -92,7 +94,7 @@ _oracle(test_path: string, incl: string, bin: string) -> int {
     // (2) build to a fresh binary (exit code is unreliable too; we rely
     // on the check gate above and on whether a runnable binary appears).
     os_system("rm -f '${bin}'")
-    bld = "AETHER_INCLUDE_PATH='${incl}' ae build '${test_path}' -o '${bin}' >/dev/null 2>&1"
+    bld = "AETHER_LIB_DIR='${incl}' ae build '${test_path}' -o '${bin}' >/dev/null 2>&1"
     os_system(bld)
     if os_system("test -x '${bin}'") != 0 {
         return NOCOMPILE
@@ -444,10 +446,14 @@ _run_string_operator(sut_path: string, original: string, want_empty: int,
 
 main() {
     // Args. aether_args_get(0) is the binary path; user args start at 1.
-    // Convention: <sut.ae> <test.ae> [include_path].
+    // Convention: <sut.ae> <test.ae> [lib_dir].
+    // lib_dir is a module search dir passed to the per-mutant `ae check`/
+    // `ae build` via AETHER_LIB_DIR (the var `ae` actually honours — the
+    // older AETHER_INCLUDE_PATH is not recognised). It must be the dir
+    // holding aeocha.ae (and any other imports the test needs).
     ac = aether_args_count()
     if ac < 3 {
-        println("usage: ae run mutate.ae -- <sut.ae> <test.ae> [include_path]")
+        println("usage: ae run mutate.ae -- <sut.ae> <test.ae> [lib_dir]")
         return
     }
     sut_path = aether_args_get(1)
@@ -456,7 +462,7 @@ main() {
     if ac >= 4 {
         incl = aether_args_get(3)
     } else {
-        // default include path = directory of the SUT
+        // default lib_dir = directory of the SUT
         slash = string.index_of_from(sut_path, "/", 0)
         last = -1
         p = slash

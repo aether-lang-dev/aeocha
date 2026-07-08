@@ -29,12 +29,12 @@ fi
 tmpdir="$(mktemp -d)"
 trap 'rm -rf "$tmpdir"' EXIT
 
-# Run from repo root so AETHER_INCLUDE_PATH picks up the local
-# aeocha.ae. The probe.ae itself signals failure via
-# aeocha.run_summary → exit(1), so the shell test just observes the
-# exit code.
+# AETHER_LIB_DIR="$ROOT" points ae's module search at the repo's local
+# aeocha.ae (the var `ae` actually honours; AETHER_INCLUDE_PATH is inert).
+# The probe.ae itself signals failure via aeocha.run_summary → exit(1),
+# so the shell test just observes the exit code.
 cd "$ROOT" || exit 1
-if ! AETHER_INCLUDE_PATH="$ROOT" "$AE" run "$SCRIPT_DIR/probe.ae" >"$tmpdir/out.log" 2>&1; then
+if ! AETHER_LIB_DIR="$ROOT" "$AE" run "$SCRIPT_DIR/probe.ae" >"$tmpdir/out.log" 2>&1; then
     echo "  [FAIL] aeocha_expect_matchers"
     tail -30 "$tmpdir/out.log"
     exit 1

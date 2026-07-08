@@ -34,7 +34,7 @@ cd "$ROOT" || exit 1
 TMPDIR="$(mktemp -d)"
 trap 'rm -rf "$TMPDIR"; rm -f /tmp/aeocha_aeb_ipc_reporting_child' EXIT
 
-if ! AETHER_INCLUDE_PATH="$ROOT" "$AE" run "$SCRIPT_DIR/probe.ae" >"$TMPDIR/out.log" 2>&1; then
+if ! AETHER_LIB_DIR="$ROOT" "$AE" run "$SCRIPT_DIR/probe.ae" >"$TMPDIR/out.log" 2>&1; then
     echo "  [FAIL] aeocha_aeb_ipc_reporting"
     tail -60 "$TMPDIR/out.log" | sed 's/^/    /'
     exit 1
