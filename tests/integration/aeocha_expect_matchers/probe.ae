@@ -91,6 +91,31 @@ handle_missing(req: ptr, res: ptr, ud: ptr) {
     http.response_set_body(res, "not found")
 }
 
+// POST routes for the POST-and-assert matchers. UI-driver style: the
+// action is in the URL, the body is empty.
+//   POST /click     -> 200  (expect_http_post_status happy path)
+//   POST /created   -> 201  (expect_http_post_ok: any 2xx, not just 200)
+//   POST /forbidden -> 403  (expect_http_post_status non-2xx; the bug the
+//                            ask names — a status-discarding helper would
+//                            assert this as a transport success)
+handle_click(req: ptr, res: ptr, ud: ptr) {
+    http.response_set_status(res, 200)
+    http.response_set_header(res, "Content-Type", "text/plain")
+    http.response_set_body(res, "ok")
+}
+
+handle_created(req: ptr, res: ptr, ud: ptr) {
+    http.response_set_status(res, 201)
+    http.response_set_header(res, "Content-Type", "text/plain")
+    http.response_set_body(res, "created")
+}
+
+handle_forbidden(req: ptr, res: ptr, ud: ptr) {
+    http.response_set_status(res, 403)
+    http.response_set_header(res, "Content-Type", "text/plain")
+    http.response_set_body(res, "nope")
+}
+
 // Process matchers, grouped as describe/it so they register real
 // pass/fail counts and exercise the it()-closure path through the
 // matcher fleet. Each it() callback captures only `fw` and declares
@@ -222,6 +247,9 @@ run_http_section(fw: ptr) {
         http.server_get(srv, "/info", handle_info, 0)
         http.server_get(srv, "/add/2/3", handle_add, 0)
         http.server_get(srv, "/missing", handle_missing, 0)
+        http.server_post(srv, "/click", handle_click, 0)
+        http.server_post(srv, "/created", handle_created, 0)
+        http.server_post(srv, "/forbidden", handle_forbidden, 0)
 
         spawn(SchedHelper())
         a = spawn(SrvActor())
@@ -269,6 +297,18 @@ run_http_section(fw: ptr) {
             "GET /info body has demo")
         aeocha.expect_http_get_status("${base}/missing", 404, "GET /missing is 404")
         println("  ✓ all 3 GET-and-assert matchers ran against fixture server")
+
+        // --- High-level POST-and-assert matchers --------------------
+        // Body-less POSTs (action in the URL). /click is 200, /created is
+        // 201 (proves _ok accepts any 2xx, not just 200), /forbidden is
+        // 403 (proves _status catches the non-2xx the ask's bespoke
+        // helper silently passed).
+        aeocha.expect_http_post_status("${base}/click", 200, "POST /click is 200")
+        aeocha.expect_http_post_ok("${base}/click", "POST /click ok (2xx)")
+        aeocha.expect_http_post_ok("${base}/created", "POST /created ok (201 is 2xx)")
+        aeocha.expect_http_post_status("${base}/forbidden", 403,
+            "POST /forbidden is 403")
+        println("  ✓ both POST-and-assert matchers ran against fixture server")
 
         // No teardown handle needed — the server runs on a detached
         // actor thread and the process exits at the end of main().
