@@ -4,6 +4,16 @@ Aeocha is a BDD-style test framework for
 [Aether](https://github.com/aether-lang-org/aether): nested suites, hooks, soft
 assertions, fluent expectations, timing helpers, and process and HTTP matchers.
 
+Most of it now ships inside Aether's own stdlib — `std.spec` (framework core,
+asserts, fluent chain), `std.os.testing` (process matchers), and
+`std.http.client.httptest` (HTTP matchers, `within`/`without`, `eventually`).
+`aeocha.ae` is a thin compatibility facade forwarding to those modules, so
+existing `import aeocha` code keeps working unchanged; new projects can
+`import std.spec` directly. What only Aeocha has: the structured `version=1`
+report `run_summary` sends over an IPC back-channel when run under
+[aeb](https://github.com/aether-lang-org/aeb), and mutation testing
+(`contrib/mutate`). See [deprecation_notice.md](deprecation_notice.md).
+
 ```aether
 import aeocha
 import calc
@@ -40,7 +50,11 @@ maintainer notes rather than user guides.
 
 ## Requirements
 
-- Aether `ae` v0.494.0 or newer
+- An Aether `ae` whose stdlib includes `std.spec`, `std.os.testing`, and
+  `std.http.client.httptest` (landed via
+  [aether PR #1574](https://github.com/aether-lang-dev/aether/pull/1574) —
+  unreleased at the time of writing; pin the first release carrying it here
+  once cut)
 - `libpcre2-8` only when using `expect_stdout_matches_regex`
 
 ## Install

@@ -2,7 +2,8 @@
 
 **Requested by:** aether-ui's grand_perspective AetherUIDriver specs
 (`~/scm/aether-ui/tests/grand_perspective/gp_driver.ae`, downstream
-consumer). **Status:** DONE (2026-07-08). `expect_http_post_status` and
+consumer). **Status:** DONE (2026-07-08), since ported to
+`std.http.client.httptest` (aether PR #1574); archived. `expect_http_post_status` and
 `expect_http_post_ok` shipped in `aeocha.ae`, mirroring the GET family
 (shared retry driver, honour within/without). Fixture coverage +
 fail-path verified in the `aeocha_expect_matchers` integration probe

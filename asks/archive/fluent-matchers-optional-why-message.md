@@ -1,7 +1,10 @@
 # Ask: an optional "why" message on the fluent matchers
 
 **Requested by:** the `aeo` orchestrator's specs (downstream consumer).
-**Status:** requested (2026-06-28).
+**Status:** moved upstream (2026-08-14) — the fluent chain now lives in
+`std/spec/module.ae`, so this ask was refiled as
+[aether#1576](https://github.com/aether-lang-dev/aether/issues/1576).
+Archived here for provenance; originally requested 2026-06-28.
 
 ## Summary
 

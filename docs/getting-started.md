@@ -4,7 +4,10 @@ This guide takes a two-file Aether program from source to a passing Aeocha test.
 
 ## Prerequisites
 
-Use Aether `ae` v0.494.0 or newer. Install a prebuilt toolchain from the
+Use an Aether `ae` whose stdlib includes `std.spec`, `std.os.testing`, and
+`std.http.client.httptest` — Aeocha is now a thin facade forwarding to those
+modules (see the README's Requirements section for the minimum release; the
+change landed via aether PR #1574). Install a prebuilt toolchain from the
 [Aether releases](https://github.com/aether-lang-dev/aether/releases/latest),
 or use an existing `ae` to run `ae upgrade`. Building Aether from source is a
 fallback, not the normal prerequisite for using Aeocha.

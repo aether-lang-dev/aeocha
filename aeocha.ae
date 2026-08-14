@@ -1,11 +1,37 @@
 // Aeocha — BDD-style test framework for Aether
 // MIT License — Copyright (c) 2025 Aether Programming Language Contributors
 //
-// Spec framework with describe / it / before_each / after_each, built
-// on Aether's trailing blocks + closures + the _ctx builder
-// context-injection pattern.
+// THINNED (stage 3 — see deprecation_notice.md): the framework core and
+// every matcher family were ported verbatim into the Aether stdlib.
+// This file is now a compatibility facade: each public name is a thin
+// forwarder to its std home, so existing `import aeocha` code keeps
+// working unchanged.
 //
-// Usage:
+//   framework core + flat asserts + fluent chain
+//     + collection matchers + expect_elapsed_under   -> std.spec
+//   process matchers (expect_exit, expect_stdout_*)  -> std.os.testing
+//   HTTP matchers + within/without + eventually      -> std.http.client.httptest
+//
+// Forwarding is whole-module import + namespaced calls, NOT selective
+// import: a selectively imported function that reads its module's
+// mutable var fails to pull the global (aether #1573), and fail() plus
+// the retry family are exactly that shape. The ambient `current_fw`
+// cell now lives in std.spec — init() forwards to spec.init() which
+// sets it, and every matcher in all three std modules reports through
+// it, so mixing aeocha.* and spec.* calls in one process stays
+// coherent.
+//
+// What still LIVES here (no stdlib home):
+//   - run_summary's aeb IPC back-channel: the pinned version=1 KV+tab
+//     report written to ipc.parent_channel() when run under aeb's
+//     driver_test. std.spec grew a DIFFERENT transport for
+//     `ae test --format` (env-file via AE_SPEC_FORMAT/AE_SPEC_REPORT);
+//     this one stays until someone converges the two. Removing it
+//     breaks `aeb test`. See aeocha-aeb-ipc-reporting.md.
+//   - contrib/mutate — mutation testing (a source-rewriting tool, not
+//     a library surface).
+//
+// Usage (unchanged):
 //
 //     import aeocha
 //
@@ -18,40 +44,21 @@
 //             aeocha.it("starts at zero") callback {
 //                 aeocha.assert_eq(count(), 0, "initial")
 //             }
-//             aeocha.it("increments") callback {
-//                 increment()
-//                 aeocha.assert_eq(count(), 1, "after one inc")
-//             }
 //         }
 //         aeocha.run_summary(fw)
 //     }
 //
 // Run with: aeb test  (or `ae run my_test.ae` if you prefer no harness).
 // Exit code 0 = all passed, 1 = failures.
-//
-// fw threading (mostly removed): the framework counters live in a `fw`
-// context map, but matchers no longer take it as a parameter. init()
-// stores the context in a module-level `current_fw` cell (Aether gained
-// mutable module-level globals + module-var-shared-across-imports), and
-// every assert_*/expect_*/fail reads it. Only the *structural* calls
-// still take `fw`: the top-level `describe(fw, ...)` (no enclosing block
-// to auto-inject a context) and `run_summary(fw)`. Tradeoff: one
-// framework per process — a second init() rebinds current_fw. Nested
-// describe/it/hooks omit the arg entirely (Aether auto-injects the
-// suite `_ctx`).
-//
-// `after_each` is the survivor; bare `after` was deleted because it
-// collides with Aether's actor-receive `after N -> { ... }` timeout
-// syntax (TODO item 2).
 
+import std.spec
+import std.os.testing
+import std.http.client.httptest
 import std.list
 import std.map
 import std.string
 import std.strbuilder
-import std.http
-import std.http.client
 import std.os
-import std.regex
 import std.ipc
 import std.net
 
@@ -81,22 +88,19 @@ exports (
     expect_http_body_contains, expect_http_body_eq, expect_http_header,
     expect_http_body_json_field,
     // High-level GET-and-assert matchers (do the request lifecycle for
-    // the caller — one line per asserted HTTP response). Honour a
-    // preceding within()/without() floating modifier for retry.
+    // the caller). Honour a preceding within()/without() modifier.
     expect_http_get_status,
     expect_http_get_body_eq, expect_http_get_body_contains,
     // POST-and-assert siblings (body-less; action encoded in the URL).
     expect_http_post_status, expect_http_post_ok,
-    // Floating-modifier retry scoping (FluentSelenium within/without):
-    // set an ambient budget the next GET matcher polls against.
+    // Floating-modifier retry scoping (FluentSelenium within/without)
     within, within_poll, without, without_poll,
-    // Generic poll-until form of the floating modifier (within(5s);
-    // eventually(pred, msg)). Unblocked by aether #940/#943.
+    // Generic poll-until form of the floating modifier
     eventually,
-    // Fluent assertion facade — subject-first, chainable (ae 0.328+:
-    // needs cross-module UFCS #934 + module-var-across-import #937, both
-    // fixed). expect_int/expect_str start a chain that reads the
-    // framework from an ambient cell, so no `fw` leaks into the chain.
+    // Fluent assertion facade — subject-first, chainable. The subject
+    // types are std.spec's, re-exported: a consumer's own `.to_*`
+    // extension names `IntSubject` in a type position exactly as
+    // before.
     expect_int, expect_str, not_,
     IntSubject, StrSubject,
     to_equal, to_be_gt, to_be_lt, to_be_truthy, to_be_falsy,
@@ -109,1410 +113,255 @@ exports (
     run_summary
 )
 
-// Ambient "current framework" cell. EVERY matcher reads it — the flat
-// assert_*/expect_* family and the fluent chain alike — so no `fw`
-// argument threads through assertions (3a). init() sets it; fail() reads
-// it. Declared `ptr` (not an inferred int — aether #929) so the 64-bit
-// pointer survives, and relies on module-var state being shared across
-// the import boundary (aether #937, fixed in 0.328). Single-framework
-// per process: a second init() overwrites it — the documented tradeoff
-// for ambient state. To drive two frameworks at once you'd need the
-// old fw-threaded API back; that's the price of the cleaner signatures.
-var current_fw: ptr = null
-
-// Floating-modifier retry budget (the FluentSelenium within()/without()
-// pattern). within(5s) sets an ambient budget that the NEXT retryable
-// matcher (the expect_http_get_* family) consults, then auto-reverts —
-// "if you don't do within there is no waiting; it doesn't last beyond
-// the operation to its right." Positional, one-shot, self-reverting:
-// not a block, binds no name, attaches to the next operation like an
-// adverb to a verb. Declared `long` (ns) — an inferred int would
-// truncate a 64-bit ns budget (aether #929). `without_mode` flips the
-// poll sense: within waits for success, without waits for the condition
-// to stop holding. poll_ns is the inter-attempt sleep.
-var retry_budget_ns: long = 0
-var retry_poll_ns: long = 0
-var retry_without: int = 0
-
-// within(budget) — wait up to `budget` for the next retryable matcher to
-// pass, polling every 50ms. without(budget) — wait up to `budget` for it
-// to STOP passing (poll-until-absent). within_poll/without_poll set an
-// explicit poll interval. All four are one-shot: the next retryable
-// matcher consumes and clears the budget.
-within(budget: Duration)        { retry_budget_ns = budget.ns  retry_poll_ns = 50000000  retry_without = 0 }
-within_poll(budget: Duration, poll: Duration) { retry_budget_ns = budget.ns  retry_poll_ns = poll.ns  retry_without = 0 }
-without(budget: Duration)       { retry_budget_ns = budget.ns  retry_poll_ns = 50000000  retry_without = 1 }
-without_poll(budget: Duration, poll: Duration) { retry_budget_ns = budget.ns  retry_poll_ns = poll.ns  retry_without = 1 }
-
-// Snapshot the ambient retry budget and FULLY reset the retry state for
-// the next matcher. Returns the budget (0 = no retry). The caller must
-// read retry_poll_ns / retry_without BEFORE calling this (they're reset
-// here too). Resetting all three — not just the budget — is essential:
-// otherwise a no-within matcher after a without() would inherit the
-// stale without flag and invert its sense. One-shot means one-shot for
-// every field of the modifier.
-_take_retry_budget() -> long {
-    b = retry_budget_ns
-    retry_budget_ns = 0
-    retry_poll_ns = 0
-    retry_without = 0
-    return b
-}
-
 // ---------------------------------------------------------------------------
-// Framework context — counters and depth, threaded through every call
+// Framework core -> std.spec
 // ---------------------------------------------------------------------------
 
-// Build a fresh framework context. Holds the test-run counters
-// (passed / failed) and the indentation depth (depth) as refs. The
-// caller threads the returned ptr through every aeocha.* call; the
-// suite contexts created by describe() carry it as an inner field.
-//
-// Also stamps the run-start timestamp + a per-it() record list +
-// a "current_it" pointer-cell. These exist whether or not a parent
-// IPC channel is present — the cost is bounded (a list of small
-// maps, one per it()) and they're used by run_summary's structured
-// report when invoked under a parent (e.g. aeb's driver_test). When
-// invoked without a parent (`ae run foo.ae` from a terminal),
-// run_summary doesn't read them and they get freed at exit.
-init() -> ptr {
-    fw = map.new()
-    map.put_raw(fw, "passed", ref(0))
-    map.put_raw(fw, "failed", ref(0))
-    map.put_raw(fw, "depth",  ref(0))
-    // Per-it() telemetry (for the structured aeb-report path).
-    // "current_it" stores the in-flight it-record map directly (or null
-    // when no it() is running) — bypasses ref cells because ref_get
-    // truncates pointers to 32 bits in codegen. "t_start_ns_str" is a
-    // decimal-string of the monotonic-clock start so we keep all 64
-    // bits; parsed back via string.get_long in run_summary. Monotonic
-    // (os.now_monotonic_ns), not wall-clock (clock_ns): the run-total
-    // duration is a delta, and a wall-clock jump (NTP step, DST) mid-run
-    // would otherwise corrupt it. Only deltas are meaningful here.
-    map.put_raw(fw, "its", list.new())
-    map.put_raw(fw, "current_it", null)
-    map.put_raw(fw, "t_start_ns_str", "${os.now_monotonic_ns()}")
-    // Make this the ambient framework for the fluent facade.
-    current_fw = fw
-    return fw
-}
-
-// ---------------------------------------------------------------------------
-// Suite context — what describe() returns for _ctx injection
-//
-// Each suite holds:
-//   "name"     — string label for printing
-//   "befores"  — list of boxed closures (run before each it())
-//   "afters"   — list of boxed closures (run after each it())
-//   "fw"       — back-pointer to the framework context (so it / assertions
-//                inside the trailing block can find passed/failed/depth)
-// ---------------------------------------------------------------------------
-
-_suite_new(name: string, fw: ptr, parent: ptr) -> ptr {
-    s = map.new()
-    map.put_raw(s, "name", name)
-    map.put_raw(s, "befores", list.new())
-    map.put_raw(s, "afters",  list.new())
-    map.put_raw(s, "fw",      fw)
-    map.put_raw(s, "parent",  parent)
-    return s
-}
-
-// Return the framework context for a given _ctx (which may itself be
-// the framework context if the call is at top level, or a suite
-// context if the call is inside a describe trailing block).
-_fw_of(ctx: ptr) -> ptr {
-    if map.has(ctx, "fw") == 1 {
-        f = map.get_raw(ctx, "fw")
-        return f
-    }
-    return ctx
-}
-
-// ---------------------------------------------------------------------------
-// describe() — top-level grouping. Trailing-block-driven; the block
-// receives the suite context as _ctx so before_each/after_each/it
-// register against it.
-// ---------------------------------------------------------------------------
+// init() forwards to spec.init(), which also sets std.spec's ambient
+// current_fw cell — the one every matcher (flat, fluent, process,
+// HTTP) reports through. One framework per process, as before.
+init() -> ptr { return spec.init() }
 
 describe(_ctx: ptr, description: string) -> ptr {
-    fw = _fw_of(_ctx)
-    depth_ref = map.get_raw(fw, "depth")
-    d = ref_get(depth_ref)
-    for (i = 0; i < d; i++) { print("  ") }
-    println(description)
-    ref_set(depth_ref, d + 1)
-
-    parent = null
-    if map.has(_ctx, "fw") == 1 {
-        parent = _ctx
-    }
-    return _suite_new(description, fw, parent)
+    return spec.describe(_ctx, description)
 }
 
-// ---------------------------------------------------------------------------
-// before_each / after_each — register hooks against the surrounding
-// describe's suite context.
-// ---------------------------------------------------------------------------
+before_each(_ctx: ptr, setup: fn) { spec.before_each(_ctx, setup) }
 
-before_each(_ctx: ptr, setup: fn) {
-    bl = map.get_raw(_ctx, "befores")
-    list.add(bl, box_closure(setup))
-}
-
-after_each(_ctx: ptr, teardown: fn) {
-    al = map.get_raw(_ctx, "afters")
-    list.add(al, box_closure(teardown))
-}
-
-// Helper to run all before_each hooks for a suite and its ancestors,
-// from outer-most to inner-most.
-_run_befores(s: ptr) {
-    p = map.get_raw(s, "parent")
-    if p != null {
-        _run_befores(p)
-    }
-    befores = map.get_raw(s, "befores")
-    n = list.size(befores)
-    for (i = 0; i < n; i++) {
-        bh = list.get_raw(befores, i)
-        call(unbox_closure(bh))
-    }
-}
-
-// Helper to run all after_each hooks for a suite and its ancestors,
-// from inner-most to outer-most.
-_run_afters(s: ptr) {
-    afters = map.get_raw(s, "afters")
-    n = list.size(afters)
-    for (i = 0; i < n; i++) {
-        ah = list.get_raw(afters, i)
-        call(unbox_closure(ah))
-    }
-    p = map.get_raw(s, "parent")
-    if p != null {
-        _run_afters(p)
-    }
-}
-
-// ---------------------------------------------------------------------------
-// it() — one test case. Runs all befores, then the test, then all
-// afters. Failure is communicated by assertions inside the test body
-// bumping the framework's failed counter; we snapshot the count
-// before and after to know whether anything failed in this run.
-// ---------------------------------------------------------------------------
+after_each(_ctx: ptr, teardown: fn) { spec.after_each(_ctx, teardown) }
 
 it(_ctx: ptr, description: string, test_fn: fn) {
-    // budget_ns 0 = no time budget (plain it()).
-    _it_impl(_ctx, description, test_fn, 0)
+    spec.it(_ctx, description, test_fn)
 }
 
-// it_within(_ctx, description, budget, test_fn) — an it() that also
-// fails if the test body takes longer than `budget`. The budget check
-// is layered on top of the normal assertion-based pass/fail: a body
-// that asserts cleanly but runs over budget still goes red. Uses the
-// same monotonic elapsed the report already records, so there's no
-// extra measurement. `budget` is a Duration literal (`50ms`, `2s`).
 it_within(_ctx: ptr, description: string, budget: Duration, test_fn: fn) {
-    _it_impl(_ctx, description, test_fn, budget.ns)
+    spec.it_within(_ctx, description, budget, test_fn)
 }
 
-// Shared it() body. budget_ns > 0 adds a "ran within budget" check
-// after the body completes; 0 disables it.
-_it_impl(_ctx: ptr, description: string, test_fn: fn, budget_ns: long) {
-    fw = _fw_of(_ctx)
-    passed_ref = map.get_raw(fw, "passed")
-    failed_ref = map.get_raw(fw, "failed")
-    depth_ref = map.get_raw(fw, "depth")
+fail(msg: string) { spec.fail(msg) }
 
-    // Run before hooks (inherited outer-to-inner)
-    _run_befores(_ctx)
+assert_true(condition: int, msg: string) { spec.assert_true(condition, msg) }
 
-    // Build a per-it record map and stash it as the "current" so
-    // fail() can capture the first failure message into it. The
-    // record gets appended to fw.its at the end of this call,
-    // regardless of pass/fail, with status + duration filled in.
-    // Pointer-valued slots (current_it, the it-record map, the it
-    // record's "duration_ms_str") are stored via map.put_raw rather
-    // than through ref() cells because ref_get truncates to 32 bits.
-    it_rec = map.new()
-    map.put_raw(it_rec, "name", description)
-    its_list = map.get_raw(fw, "its")
-    map.put_raw(fw, "current_it", it_rec)
-
-    // Monotonic clock for the elapsed span — only the delta matters,
-    // and clock_ns() (wall clock) could jump under NTP/DST mid-test.
-    t_start_ns = os.now_monotonic_ns()
-    old_failed = ref_get(failed_ref)
-    call(test_fn)
-    t_end_ns = os.now_monotonic_ns()
-    elapsed_ns = t_end_ns - t_start_ns
-
-    // Time-budget check (it_within). Reported via fail() while
-    // current_it is still set, so it counts against this it() and its
-    // message is captured in the record. Done before tearing down
-    // current_it below.
-    if budget_ns > 0 {
-        if elapsed_ns >= budget_ns {
-            elapsed_ms = elapsed_ns / 1000000
-            budget_ms = budget_ns / 1000000
-            fail("${description} — exceeded time budget: ${elapsed_ms}ms >= ${budget_ms}ms")
-        }
-    }
-
-    // Tear down "current" pointer before any after-hooks so a hook
-    // failure doesn't get mis-attributed to this it's record.
-    map.put_raw(fw, "current_it", null)
-
-    // Indent + result line
-    d = ref_get(depth_ref)
-    for (i = 0; i < d; i++) { print("  ") }
-    is_fail = 0
-    if ref_get(failed_ref) == old_failed {
-        print("\x1b[32m  ✓\x1b[0m ${description}\n")
-        ref_set(passed_ref, ref_get(passed_ref) + 1)
-    } else {
-        print("\x1b[31m  ✗\x1b[0m ${description}\n")
-        is_fail = 1
-    }
-
-    // Stamp status + duration on the record.
-    if is_fail == 1 {
-        map.put_raw(it_rec, "status", "FAIL")
-    } else {
-        map.put_raw(it_rec, "status", "PASS")
-    }
-    // Store the FULL ns duration (decimal string to keep all 64 bits,
-    // like t_start_ns_str). The report derives ms from this when it
-    // needs the v1-compat field; rows carry the ns directly so fast
-    // tests don't all round to 0ms (4e).
-    map.put_raw(it_rec, "duration_ns_str", "${elapsed_ns}")
-    list.add(its_list, it_rec)
-
-    // Run after hooks (inherited inner-to-outer)
-    _run_afters(_ctx)
-}
-
-// ---------------------------------------------------------------------------
-// Assertions — each reports via fail(), which bumps the ambient
-// framework's failed counter (current_fw) when the check doesn't hold.
-// No `fw` parameter (3a). They print the failure inline and continue
-// (no exit), letting the surrounding it() see the bumped counter and
-// mark the case red.
-// ---------------------------------------------------------------------------
-
-// fail(msg) — record a failure against the ambient framework
-// (current_fw, set by init()). No `fw` parameter since 3a: every
-// matcher and user assertion reports through here, reading the ambient
-// cell rather than threading `fw`. Single-framework-per-process is the
-// documented tradeoff (a second init() rebinds current_fw).
-fail(msg: string) {
-    failed_ref = map.get_raw(current_fw, "failed")
-    print("\x1b[31m      FAIL: ${msg}\x1b[0m\n")
-    ref_set(failed_ref, ref_get(failed_ref) + 1)
-
-    // Capture first failure message into the current it() record
-    // (if any). The structured aeb-report writes one message per
-    // failed it; subsequent fails within the same it are visible
-    // in the human output but only the first is recorded — keeps
-    // the report bounded and matches "what made this it red"
-    // semantics. current_it is stored directly (not via ref()) to
-    // preserve the full pointer width.
-    cur = map.get_raw(current_fw, "current_it")
-    if cur != null {
-        if map.has(cur, "failure_message") == 0 {
-            map.put_raw(cur, "failure_message", msg)
-        }
-    }
-}
-
-assert_true(condition: int, msg: string) {
-    if condition == 0 {
-        fail("${msg} — expected true")
-    }
-}
-
-assert_false(condition: int, msg: string) {
-    if condition != 0 {
-        fail("${msg} — expected false")
-    }
-}
+assert_false(condition: int, msg: string) { spec.assert_false(condition, msg) }
 
 assert_eq(actual: int, expected: int, msg: string) {
-    if actual != expected {
-        fail("${msg} — expected ${expected}, got ${actual}")
-    }
+    spec.assert_eq(actual, expected, msg)
 }
 
 assert_str_eq(actual: string, expected: string, msg: string) {
-    if string.equals(actual, expected) == 0 {
-        fail("${msg} — expected '${expected}', got '${actual}'")
-    }
+    spec.assert_str_eq(actual, expected, msg)
 }
 
-// First byte index where a and b differ. -1 if equal. If one is a
-// prefix of the other, returns the shorter length (the first position
-// that's present in one but not the other). char_at_n over char_at:
-// lengths are cached, so the length-aware accessor skips a per-byte
-// strlen.
-_first_diff(a: string, b: string) -> int {
-    la = string.length(a)
-    lb = string.length(b)
-    lim = la
-    if lb < la { lim = lb }
-    i = 0
-    while i < lim {
-        if string.char_at_n(a, la, i) != string.char_at_n(b, lb, i) {
-            return i
-        }
-        i = i + 1
-    }
-    if la != lb { return lim }
-    return -1
-}
-
-// assert_str_eq_diff(actual, expected, msg) — exact string equality
-// like assert_str_eq, but on mismatch the message shows the two values
-// aligned with a caret under the first differing byte (Jest/Vitest
-// style). Reach for this over assert_str_eq when the strings are long
-// enough that "expected X got Y" buries the actual difference.
-//
-// The caret column is fixed: the value lines are printed as
-//   "        actual:   \"" + value
-// whose prefix is 19 chars (8 spaces + 'actual:   "'), so the caret
-// pads to 19 + index. ASCII byte index, not codepoint — fine for the
-// ASCII test output this targets; a multibyte value just points at the
-// first differing byte.
 assert_str_eq_diff(actual: string, expected: string, msg: string) {
-    if string.equals(actual, expected) == 0 {
-        d = _first_diff(actual, expected)
-        caret = string.pad_start("^", 19 + d + 1, 32)
-        fail("${msg} — strings differ at index ${d}\n        expected: \"${expected}\"\n        actual:   \"${actual}\"\n${caret}")
-    }
+    spec.assert_str_eq_diff(actual, expected, msg)
 }
 
 assert_not_eq(actual: int, expected: int, msg: string) {
-    if actual == expected {
-        fail("${msg} — expected not ${expected}")
-    }
+    spec.assert_not_eq(actual, expected, msg)
 }
 
 assert_gt(actual: int, expected: int, msg: string) {
-    if actual <= expected {
-        fail("${msg} — expected > ${expected}, got ${actual}")
-    }
+    spec.assert_gt(actual, expected, msg)
 }
 
 assert_contains(haystack: string, needle: string, msg: string) {
-    if string.contains(haystack, needle) == 0 {
-        fail("${msg} — '${haystack}' does not contain '${needle}'")
-    }
+    spec.assert_contains(haystack, needle, msg)
 }
 
-assert_null(value: ptr, msg: string) {
-    if value != 0 {
-        fail("${msg} — expected null")
-    }
-}
+assert_null(value: ptr, msg: string) { spec.assert_null(value, msg) }
 
-assert_not_null(value: ptr, msg: string) {
-    if value == 0 {
-        fail("${msg} — expected non-null")
-    }
-}
+assert_not_null(value: ptr, msg: string) { spec.assert_not_null(value, msg) }
 
-// ---------------------------------------------------------------------------
-// Integration-shape matchers
-//
-// Built on top of the assert_* primitives above, these absorb the
-// bash-shaped "spawn / capture / awk-and-compare" idiom into a single
-// Aether call. Two flavours:
-//
-//   - Process matchers consume a `(stdout, exit, stderr)` triple from
-//     `os.run_capture(prog, argv, env)`. The triple is always passed
-//     destructured (Aether tuples don't pass around as a single value).
-//
-//   - HTTP matchers consume the response handle returned by
-//     `http.get` / `http.post` / `client.send_request`. A single
-//     `resp: ptr` arg works for both v1 and v2 responses (same C
-//     struct underneath).
-//
-// Each matcher takes (..., msg) and signals failure by calling
-// `fail(...)` — same shape as the `assert_*` primitives. None of
-// them allocate persistent state; intermediate `string_split` arrays
-// are freed before return.
-// ---------------------------------------------------------------------------
-
-// expect_exit(exit_code, want, msg) — child exited with the
-// expected status. The most common shape: caller writes
-//   out, exit, err = os.run_capture(prog, argv, null)
-//   aeocha.expect_exit(exit, 0, "ran cleanly")
-expect_exit(exit_code: int, want: int, msg: string) {
-    if exit_code != want {
-        fail("${msg} — expected exit ${want}, got ${exit_code}")
-    }
-}
-
-// expect_no_spawn_error(err, msg) — `os.run_capture`'s third
-// slot is non-empty only when fork/exec itself couldn't run (binary
-// not found, EACCES, etc.). Distinct from "ran but exited non-zero",
-// which is exit_code != 0 and err == "". Use this to assert "the
-// child actually started" before asserting on its output.
-expect_no_spawn_error(err: string, msg: string) {
-    if string.equals(err, "") == 0 {
-        fail("${msg} — spawn error: '${err}'")
-    }
-}
-
-// expect_stdout_contains(out, needle, msg) — captured stdout
-// has the substring somewhere. Sibling of assert_contains with a
-// slot-shaped signature for the run_capture tuple. Param is named
-// `out` not `stdout` because Windows MinGW <stdio.h> defines
-// `stdout` as a preprocessor macro (`(__acrt_iob_func(1))`) and a
-// param named `stdout` gets rewritten mid-declaration. Same
-// rationale for the other three expect_stdout_* matchers below.
-expect_stdout_contains(out: string, needle: string, msg: string) {
-    if string.contains(out, needle) == 0 {
-        fail("${msg} — stdout does not contain '${needle}'")
-    }
-}
-
-// Child stderr matchers. The stderr capture these need now exists:
-// `os.run_full(prog, argv, env, stdin) -> (stdout, stderr, exit, err)`
-// captures the child's two streams SEPARATELY (no pipe-buffer
-// deadlock), unlike `os.run_capture` whose third slot is the
-// spawn-error string, not child stderr. Callers feed the 2nd tuple
-// slot to these matchers:
-//   out, err, exit, spawn_err = os.run_full(prog, argv, null, "")
-//   aeocha.expect_no_spawn_error(spawn_err, "started")
-//   aeocha.expect_stderr_contains(err, "deprecated", "warned")
-// (param `err` is the captured child stderr stream — distinct from
-// the spawn-error slot that expect_no_spawn_error consumes.)
-
-// expect_stderr_contains(err, needle, msg) — captured child
-// stderr has the substring somewhere. The stderr twin of
-// expect_stdout_contains; consumes os.run_full's 2nd slot.
-expect_stderr_contains(err: string, needle: string, msg: string) {
-    if string.contains(err, needle) == 0 {
-        fail("${msg} — stderr does not contain '${needle}'")
-    }
-}
-
-// expect_stderr_empty(err, msg) — child wrote nothing to stderr.
-// Asserts a clean run with no warnings/diagnostics on fd 2. Consumes
-// os.run_full's 2nd slot.
-expect_stderr_empty(err: string, msg: string) {
-    if string.equals(err, "") == 0 {
-        fail("${msg} — stderr not empty: '${err}'")
-    }
-}
-
-// expect_stdout_line_count(out, want, msg) — stdout has
-// exactly `want` newline-separated lines. Trailing-newline aware:
-// `"a\nb\n"` counts as 2 lines, not 3. (param `out`, not `stdout` —
-// see expect_stdout_contains for the Windows-MinGW reason.)
-expect_stdout_line_count(out: string, want: int, msg: string) {
-    arr = string.split(out, "\n")
-    n = string.array_size(arr)
-    // string_split("a\nb\n", "\n") produces ["a", "b", ""] — drop
-    // the trailing empty when the last byte is a newline.
-    sl = string.length(out)
-    if sl > 0 {
-        if string.char_at(out, sl - 1) == 10 {
-            n = n - 1
-        }
-    }
-    string.array_free(arr)
-    if n != want {
-        fail("${msg} — expected ${want} lines, got ${n}")
-    }
-}
-
-// expect_stdout_line_field(out, prefix, n, want, msg) —
-// finds the first line starting with `prefix`, tokenises on runs
-// of whitespace (spaces and tabs), and compares field index `n` to
-// `want`. This is the matcher that absorbs the most bash:
-// `rev=$(echo "$out" | awk '/^Revision:/{print $2}')` collapses to
-// `expect_stdout_line_field(fw, out, "Revision:", 1, "3", ...)`.
-//
-// Whitespace handling matches awk's default: any run of spaces or
-// tabs separates tokens, leading whitespace is skipped, and empty
-// tokens never appear in the field array. So a column-aligned
-// `Revision:    3` line tokenises to `["Revision:", "3"]` and
-// field 1 is `"3"` regardless of how many spaces actually separate
-// them.
-//
-// Indexing is 0-based on tokens — n=0 names the prefix token,
-// n=1 the next non-blank token. (awk's `$1`/`$2` are 1-based;
-// Aeocha is 0-based to match the rest of the matcher fleet.)
-//
-// Limitations (deliberate — porter scope):
-//   - First match wins. Use a more specific prefix if multiple
-//     lines share a prefix and you want the second one.
-//   - Whitespace = ASCII space + tab. Newlines have already been
-//     consumed by the per-line split.
-//
-// (Param `out`, not `stdout` — Windows MinGW reason.)
-expect_stdout_line_field(out: string, prefix: string,
-                          n: int, want: string, msg: string) {
-    lines = string.split(out, "\n")
-    line_count = string.array_size(lines)
-    found = 0
-    actual = ""
-    i = 0
-    while i < line_count {
-        line_ptr = string.array_get(lines, i)
-        if string.starts_with(line_ptr, prefix) == 1 {
-            // Tokenise on runs of whitespace (space=32, tab=9). Walk
-            // the line collecting non-whitespace spans into an
-            // imaginary array indexed by `tok_idx`; when tok_idx
-            // reaches `n` capture the span.
-            // char_at_n over char_at: line_len is already cached, so
-            // the length-aware accessor skips the per-call strlen
-            // char_at would pay on every byte of the line walk.
-            line_len = string.length(line_ptr)
-            tok_idx = 0
-            p = 0
-            while p < line_len {
-                c = string.char_at_n(line_ptr, line_len, p)
-                if c == 32 || c == 9 {
-                    p = p + 1
-                } else {
-                    start = p
-                    scanning = 1
-                    while scanning == 1 {
-                        if p >= line_len {
-                            scanning = 0
-                        } else {
-                            c2 = string.char_at_n(line_ptr, line_len, p)
-                            if c2 == 32 || c2 == 9 {
-                                scanning = 0
-                            } else {
-                                p = p + 1
-                            }
-                        }
-                    }
-                    if tok_idx == n {
-                        actual = string.substring(line_ptr, start, p)
-                        found = 1
-                        p = line_len
-                    }
-                    tok_idx = tok_idx + 1
-                }
-            }
-            i = line_count
-        } else {
-            i = i + 1
-        }
-    }
-    string.array_free(lines)
-    if found == 0 {
-        fail("${msg} — no line starts with '${prefix}' or field ${n} missing")
-    } else {
-        if string.equals(actual, want) == 0 {
-            fail("${msg} — expected '${want}', got '${actual}'")
-        }
-    }
-}
-
-// expect_stdout_line_after(out, prefix, want, msg) — finds
-// the first line starting with `prefix`, takes everything after
-// the prefix, trims leading and trailing whitespace, and compares
-// against `want`. Absorbs the bash idiom
-//   log=$(echo "$out" | sed -n 's/^Log: *//p')
-// which is common in svn/git-style key-value output where the
-// value can contain embedded whitespace and a single-token field
-// match wouldn't capture it correctly.
-//
-// `expect_stdout_line_field(out, "Log:", 1, ...)` would only see
-// the first whitespace-separated token after the prefix; this
-// matcher captures the entire post-prefix remainder.
-expect_stdout_line_after(out: string, prefix: string,
-                          want: string, msg: string) {
-    lines = string.split(out, "\n")
-    line_count = string.array_size(lines)
-    found = 0
-    actual = ""
-    i = 0
-    while i < line_count {
-        line_ptr = string.array_get(lines, i)
-        if string.starts_with(line_ptr, prefix) == 1 {
-            plen = string.length(prefix)
-            llen = string.length(line_ptr)
-            // char_at_n over char_at: llen is already cached, so the
-            // length-aware accessor skips the per-call strlen.
-            // Skip leading whitespace immediately after the prefix.
-            start = plen
-            scanning_lead = 1
-            while scanning_lead == 1 {
-                if start >= llen {
-                    scanning_lead = 0
-                } else {
-                    c = string.char_at_n(line_ptr, llen, start)
-                    if c == 32 || c == 9 {
-                        start = start + 1
-                    } else {
-                        scanning_lead = 0
-                    }
-                }
-            }
-            // Trim trailing whitespace.
-            end = llen
-            scanning_trail = 1
-            while scanning_trail == 1 {
-                if end <= start {
-                    scanning_trail = 0
-                } else {
-                    c2 = string.char_at_n(line_ptr, llen, end - 1)
-                    if c2 == 32 || c2 == 9 {
-                        end = end - 1
-                    } else {
-                        scanning_trail = 0
-                    }
-                }
-            }
-            actual = string.substring(line_ptr, start, end)
-            found = 1
-            i = line_count
-        } else {
-            i = i + 1
-        }
-    }
-    string.array_free(lines)
-    if found == 0 {
-        fail("${msg} — no line starts with '${prefix}'")
-    } else {
-        if string.equals(actual, want) == 0 {
-            fail("${msg} — expected '${want}', got '${actual}'")
-        }
-    }
-}
-
-// expect_stdout_matches(out, pattern, msg) — at least one
-// stdout line matches a glob pattern (`*`, `?`, `[abc]` per
-// std.string.glob_match). Not regex — the porter spec asks for
-// "basic" pattern matching, and stdlib has no PCRE today. For full
-// regex needs, add a separate matcher after a regex extern lands.
-// (Param `out`, not `stdout` — Windows MinGW reason.)
-expect_stdout_matches(out: string, pattern: string, msg: string) {
-    lines = string.split(out, "\n")
-    line_count = string.array_size(lines)
-    found = 0
-    i = 0
-    while i < line_count {
-        line_ptr = string.array_get(lines, i)
-        if string.glob_match_raw(pattern, line_ptr, 0) == 1 {
-            found = 1
-            i = line_count
-        } else {
-            i = i + 1
-        }
-    }
-    string.array_free(lines)
-    if found == 0 {
-        fail("${msg} — no stdout line matches glob '${pattern}'")
-    }
-}
-
-// expect_stdout_matches_regex(out, pattern, msg) — at least one
-// stdout line matches a PCRE2 regular expression. The richer sibling
-// of expect_stdout_matches (which is glob-only): full regex via
-// std.regex — captures, anchors, alternation, character classes,
-// quantifiers. The pattern is UNANCHORED, so it matches anywhere in a
-// line (use `^`/`$` to anchor). Tested per-line, so `^Revision: \d+$`
-// asserts a whole-line shape without the trailing-newline split issue.
-//
-// std.regex is built against libpcre2-8. If the runtime was built
-// WITHOUT it, every regex entry point returns a clean diagnostic
-// rather than crashing — matches_lit surfaces it in the error slot.
-// We treat a non-empty error slot as a matcher failure (bad pattern OR
-// missing libpcre2) and report it, so a missing-lib environment fails
-// loudly instead of silently passing. Reach for expect_stdout_matches
-// (glob) if you must run where libpcre2 may be absent.
-expect_stdout_matches_regex(out: string, pattern: string, msg: string) {
-    lines = string.split(out, "\n")
-    line_count = string.array_size(lines)
-    found = 0
-    rerr = ""
-    i = 0
-    while i < line_count {
-        line_ptr = string.array_get(lines, i)
-        ok, err = regex.matches_lit(pattern, line_ptr)
-        if string.equals(err, "") == 0 {
-            // Compile/engine error (bad pattern or no libpcre2) — same
-            // for every line, so capture once and stop.
-            rerr = err
-            i = line_count
-        } else {
-            if ok == 1 {
-                found = 1
-                i = line_count
-            } else {
-                i = i + 1
-            }
-        }
-    }
-    string.array_free(lines)
-    if string.equals(rerr, "") == 0 {
-        fail("${msg} — regex '${pattern}' error: ${rerr}")
-    } else {
-        if found == 0 {
-            fail("${msg} — no stdout line matches regex '${pattern}'")
-        }
-    }
-}
-
-// ---------------------------------------------------------------------------
-// Timing-budget matcher
-//
-// expect_elapsed_under(elapsed_ns, budget, msg) — a measured span
-// is under a budget written as a Duration literal. The caller measures
-// the span itself with two monotonic-clock reads:
-//
-//     t0 = os.now_monotonic_ns()
-//     ... do work ...
-//     elapsed = os.now_monotonic_ns() - t0
-//     aeocha.expect_elapsed_under(elapsed, 50ms, "fast path")
-//
-// `elapsed_ns` is a plain int64 nanosecond count (what monotonic-ns
-// deltas yield); `budget` is a Duration (`50ms`, `2s`, `200us`). We
-// compare in ns via budget.ns — Duration-vs-plain-number is a type
-// error in Aether, so the .ns accessor is the bridge. Use monotonic
-// (not wall-clock) deltas: only the delta is meaningful and a wall
-// jump would corrupt it.
-//
-// The budget renders directly via ${budget} (Duration interpolation
-// picks the largest readable unit — `50ms`, `1.5s`); the elapsed side
-// is a plain ns count, so we show it as ms.
 expect_elapsed_under(elapsed_ns: long, budget: Duration, msg: string) {
-    if elapsed_ns < budget.ns {
-        // under budget — pass (no-op)
-    } else {
-        elapsed_ms = elapsed_ns / 1000000
-        fail("${msg} — took ${elapsed_ms}ms, budget ${budget}")
-    }
-}
-
-// expect_http_status(resp, want, msg) — response has the
-// expected HTTP status code. Works for v1 (`http.get(url)`) and v2
-// (`client.send_request(req)`) responses interchangeably.
-expect_http_status(resp: ptr, want: int, msg: string) {
-    if resp == 0 {
-        fail("${msg} — null response")
-    } else {
-        actual = http.response_status(resp)
-        if actual != want {
-            fail("${msg} — expected status ${want}, got ${actual}")
-        }
-    }
-}
-
-// expect_http_no_error(resp, msg) — transport succeeded (DNS,
-// connect, TLS, timeout all OK). Distinct from "200 OK" — non-2xx
-// is not a transport error. Pair with expect_http_status to assert
-// both layers.
-expect_http_no_error(resp: ptr, msg: string) {
-    if resp == 0 {
-        fail("${msg} — null response")
-    } else {
-        err = http.response_error(resp)
-        if string.equals(err, "") == 0 {
-            fail("${msg} — transport error: '${err}'")
-        }
-    }
-}
-
-// expect_http_body_contains(resp, needle, msg) — substring of
-// the response body. Binary-safe via the AetherString-aware
-// string.contains; embedded NULs in `body` survive the boundary as
-// long as the porter calls `client.response_body` (which preserves
-// the header) rather than the C `http_response_body_str` accessor.
-expect_http_body_contains(resp: ptr, needle: string, msg: string) {
-    if resp == 0 {
-        fail("${msg} — null response")
-    } else {
-        body = http.response_body(resp)
-        if string.contains(body, needle) == 0 {
-            fail("${msg} — body does not contain '${needle}'")
-        }
-    }
-}
-
-// expect_http_body_eq(resp, want, msg) — response body EXACTLY
-// equals `want`. The exact-match sibling of expect_http_body_contains:
-// reach for this when a substring match is too loose — e.g. a body of
-// "5" must not satisfy a check that "50" would also pass. Binary-safe
-// via string.equals (same AetherString-aware path as _contains), so a
-// porter holding a resp already can assert exact bodies without a
-// hand-rolled compare.
-expect_http_body_eq(resp: ptr, want: string, msg: string) {
-    if resp == 0 {
-        fail("${msg} — null response")
-    } else {
-        body = http.response_body(resp)
-        if string.equals(body, want) == 0 {
-            fail("${msg} — body expected '${want}', got '${body}'")
-        }
-    }
-}
-
-// expect_http_header(resp, name, want, msg) — case-insensitive
-// header equality. The header NAME is matched case-insensitively (per
-// RFC 7230); the VALUE is compared exactly. Multiple values for the
-// same header arrive joined with ", " from the stdlib accessor.
-//
-// Uses the std.http.client wrapper rather than binding the C extern
-// directly: the wrapper snapshots the borrowed thread-local buffer via
-// string.copy (closes upstream #269), so the returned value is owned
-// and can't be clobbered by a later call. Binding the raw extern here
-// would re-inherit that aliasing footgun.
-expect_http_header(resp: ptr, name: string, want: string, msg: string) {
-    if resp == 0 {
-        fail("${msg} — null response")
-    } else {
-        actual = client.response_header(resp, name)
-        if string.equals(actual, want) == 0 {
-            fail("${msg} — header '${name}' expected '${want}', got '${actual}'")
-        }
-    }
-}
-
-// expect_http_body_json_field(resp, key, want, msg) —
-// top-level JSON-string-field equality. Skips parsing libraries:
-// the porter scope is "this top-level key has this string value".
-// Looks for `"key":"want"` (with optional whitespace) inside the
-// raw body. Sufficient for status / probe / smoke endpoints; reach
-// for std.json directly when nesting or non-string values matter.
-expect_http_body_json_field(resp: ptr, key: string,
-                              want: string, msg: string) {
-    if resp == 0 {
-        fail("${msg} — null response")
-    } else {
-        body = http.response_body(resp)
-        // Build the canonical "key":"want" needle. Doesn't tolerate
-        // pretty-printed whitespace between `:` and the value — fine
-        // for the porter's smoke-endpoint use case where the server
-        // emits compact JSON. Document the constraint up here so the
-        // failure message points at the right fix.
-        needle = "\"${key}\":\"${want}\""
-        if string.contains(body, needle) == 0 {
-            fail("${msg} — JSON field '${key}' != '${want}' in body")
-        }
-    }
+    spec.expect_elapsed_under(elapsed_ns, budget, msg)
 }
 
 // ---------------------------------------------------------------------------
-// High-level GET-and-assert matchers
-//
-// The low-level expect_http_* above all take a `resp` the caller must
-// build and free. Every integration-test consumer ends up re-writing
-// the same request / send_request / request_free / (assert) /
-// response_free dance. These three matchers hide that lifecycle: each
-// performs a GET, checks the transport, asserts, and frees the
-// response — so a test asserts an HTTP response in one line.
-//
-// All three reuse the low-level matchers internally so the underlying
-// semantics (status compare, exact/substring body) stay consistent.
-//
-// Lifecycle note: client.send_request already frees the response and
-// returns null on a transport error (DNS/connect/TLS/timeout), so the
-// `cerr != ""` branch must NOT call response_free — it would
-// double-free. Only the success branch owns `resp`.
+// Fluent facade + collection matchers -> std.spec
 // ---------------------------------------------------------------------------
 
-// _http_get_probe(url, want_status, kind, want) — do ONE GET and return
-// 1 if it matched, 0 otherwise. Never calls fail; frees the response
-// itself. The silent predicate the retry driver polls. `kind`: 0 =
-// status only; 1 = status 200 + body == want; 2 = status 200 + body
-// contains want. (For kind 0, want_status is the target; for 1/2 it's
-// always 200 and `want` carries the body expectation.)
-_http_get_probe(url: string, want_status: int, kind: int, want: string) -> int {
-    req = client.request("GET", url)
-    resp, cerr = client.send_request(req)
-    client.request_free(req)
-    if string.equals(cerr, "") == 0 {
-        return 0
-    }
-    matched = 0
-    if kind == 0 {
-        if http.response_status(resp) == want_status { matched = 1 }
-    } else {
-        if http.response_status(resp) == 200 {
-            body = http.response_body(resp)
-            if kind == 1 {
-                if string.equals(body, want) == 1 { matched = 1 }
-            } else {
-                if string.contains(body, want) == 1 { matched = 1 }
-            }
-        }
-    }
-    client.response_free(resp)
-    return matched
-}
+expect_int(v: int) -> IntSubject { return spec.expect_int(v) }
 
-// _http_get_retry(url, want_status, kind, want) — honour an ambient
-// within()/without() budget by polling _http_get_probe until the
-// condition holds (within) or stops holding (without), or the budget
-// elapses. Returns the final probe verdict the matcher reports on. When
-// no budget is set this is a single probe — identical to the old
-// one-shot behaviour. Consumes the budget (one-shot modifier).
-_http_get_retry(url: string, want_status: int, kind: int, want: string) -> int {
-    // Snapshot poll/without BEFORE _take_retry_budget (which resets them).
-    poll = retry_poll_ns
-    without = retry_without
-    budget = _take_retry_budget()
-    if budget == 0 {
-        return _http_get_probe(url, want_status, kind, want)
-    }
-    deadline = os.now_monotonic_ns() + budget
-    // For within: succeed as soon as probe==1. For without: succeed as
-    // soon as probe==0 (condition gone). `target` is the probe value
-    // that means "done, satisfied".
-    target = 1
-    if without == 1 { target = 0 }
-    last = _http_get_probe(url, want_status, kind, want)
-    done = 0
-    if last == target { done = 1 }
-    while done == 0 {
-        if os.now_monotonic_ns() >= deadline {
-            done = 1
-        } else {
-            sleep(poll / 1000000)
-            last = _http_get_probe(url, want_status, kind, want)
-            if last == target { done = 1 }
-        }
-    }
-    // Report whether the satisfied condition was reached.
-    if last == target { return 1 }
-    return 0
-}
+expect_str(v: string) -> StrSubject { return spec.expect_str(v) }
 
-// expect_http_get_status(url, want_status, msg) — GET url, assert
-// the transport succeeded and the status equals want_status. Use this
-// for non-200 expectations (404, 500, redirects) where the body is not
-// the point. Honours a preceding within(budget)/without(budget): the
-// GET is retried until the status matches (within) or stops matching
-// (without), or the budget elapses.
-expect_http_get_status(url: string, want_status: int, msg: string) {
-    ok = _http_get_retry(url, want_status, 0, "")
-    if ok == 0 {
-        fail("${msg} — GET ${url} did not reach status ${want_status}")
-    }
-}
-
-// expect_http_get_body_eq(url, want, msg) — GET url, assert
-// transport ok + status 200 + body EXACTLY equals want. Prefer this
-// over _contains when the result must match exactly (e.g. GET
-// /add/2/3 returning "5" — "50" must not pass). Honours within/without.
-expect_http_get_body_eq(url: string, want: string, msg: string) {
-    ok = _http_get_retry(url, 200, 1, want)
-    if ok == 0 {
-        fail("${msg} — GET ${url} body never equalled '${want}' (200)")
-    }
-}
-
-// expect_http_get_body_contains(url, needle, msg) — GET url,
-// assert transport ok + status 200 + body contains needle. The
-// substring twin of expect_http_get_body_eq — use when the body is a
-// larger document and only a marker matters. Honours within/without.
-expect_http_get_body_contains(url: string, needle: string, msg: string) {
-    ok = _http_get_retry(url, 200, 2, needle)
-    if ok == 0 {
-        fail("${msg} — GET ${url} body never contained '${needle}' (200)")
-    }
-}
-
-// ---------------------------------------------------------------------------
-// High-level POST-and-assert matchers (sibling of the GET family)
-//
-// Body-less POSTs, the shape UI-driver style APIs use — the action is
-// encoded in the URL (POST /canvas/1/click?x=100&y=90, POST
-// /widget/7/toggle). Same one-line lifecycle contract as the GET family:
-// perform the POST, check the transport, assert the status, free the
-// response. Reuse the same within()/without() retry driver. A
-// body-carrying POST form can follow if a consumer needs it (none does).
-// ---------------------------------------------------------------------------
-
-// _http_post_probe(url, want_status, kind) — do ONE POST (no body) and
-// return 1 if it matched, 0 otherwise. Never calls fail; frees the
-// response itself. The silent predicate the retry driver polls. `kind`:
-// 0 = status == want_status; 3 = any 2xx (200–299), want_status ignored.
-_http_post_probe(url: string, want_status: int, kind: int) -> int {
-    req = client.request("POST", url)
-    resp, cerr = client.send_request(req)
-    client.request_free(req)
-    if string.equals(cerr, "") == 0 {
-        return 0
-    }
-    status = http.response_status(resp)
-    client.response_free(resp)
-    if kind == 3 {
-        if status >= 200 {
-            if status < 300 { return 1 }
-        }
-        return 0
-    }
-    if status == want_status { return 1 }
-    return 0
-}
-
-// _http_post_retry(url, want_status, kind) — POST twin of
-// _http_get_retry. Honours an ambient within()/without() budget by
-// polling _http_post_probe until the condition holds (within) or stops
-// holding (without), or the budget elapses. No budget → single probe.
-_http_post_retry(url: string, want_status: int, kind: int) -> int {
-    // Snapshot poll/without BEFORE _take_retry_budget (which resets them).
-    poll = retry_poll_ns
-    without = retry_without
-    budget = _take_retry_budget()
-    if budget == 0 {
-        return _http_post_probe(url, want_status, kind)
-    }
-    deadline = os.now_monotonic_ns() + budget
-    target = 1
-    if without == 1 { target = 0 }
-    last = _http_post_probe(url, want_status, kind)
-    done = 0
-    if last == target { done = 1 }
-    while done == 0 {
-        if os.now_monotonic_ns() >= deadline {
-            done = 1
-        } else {
-            sleep(poll / 1000000)
-            last = _http_post_probe(url, want_status, kind)
-            if last == target { done = 1 }
-        }
-    }
-    if last == target { return 1 }
-    return 0
-}
-
-// expect_http_post_status(url, want_status, msg) — POST url (no body),
-// assert the transport succeeded and the status equals want_status.
-// Fixes the common driver bug where a bespoke helper discards the status
-// so a 404'd route asserts as a transport success. Honours a preceding
-// within(budget)/without(budget) exactly like the GET family.
-expect_http_post_status(url: string, want_status: int, msg: string) {
-    ok = _http_post_retry(url, want_status, 0)
-    if ok == 0 {
-        fail("${msg} — POST ${url} did not reach status ${want_status}")
-    }
-}
-
-// expect_http_post_ok(url, msg) — POST url (no body), assert transport
-// ok + any 2xx status. The "the action succeeded, I don't care which 2xx"
-// form for fire-and-forget UI-driver POSTs. Honours within/without.
-expect_http_post_ok(url: string, msg: string) {
-    ok = _http_post_retry(url, 0, 3)
-    if ok == 0 {
-        fail("${msg} — POST ${url} was not 2xx (transport ok?)")
-    }
-}
-
-// eventually(pred, msg) — the generic poll-until form of the floating
-// modifier. `pred` is a zero-arg function returning 1 (condition holds)
-// or 0. Under a preceding within(budget) it polls pred until it returns
-// 1 (or the budget elapses); under without(budget) it polls until pred
-// returns 0. With no budget it evaluates pred ONCE — same "no within,
-// no waiting" contract as the GET matchers. Fails if the target wasn't
-// reached.
-//
-//   within(5s)
-//   aeocha.eventually(server_is_up, "server came up")
-//
-// `pred` is typically a top-level function passed by bare name; that
-// works from inside an it() closure and across the import boundary
-// since aether #940 / #943 landed.
-eventually(pred: fn, msg: string) {
-    // Snapshot poll/without BEFORE _take_retry_budget (which resets them).
-    without = retry_without
-    poll = retry_poll_ns
-    budget = _take_retry_budget()
-    // Target probe value meaning "satisfied": 1 for within, 0 for without.
-    target = 1
-    if without == 1 { target = 0 }
-
-    last = 0
-    if call(pred) == 1 { last = 1 }
-    done = 0
-    if last == target { done = 1 }
-    if budget == 0 {
-        // No within()/without(): single evaluation, no waiting.
-        done = 1
-    }
-    if done == 0 {
-        deadline = os.now_monotonic_ns() + budget
-        while done == 0 {
-            if os.now_monotonic_ns() >= deadline {
-                done = 1
-            } else {
-                sleep(poll / 1000000)
-                last = 0
-                if call(pred) == 1 { last = 1 }
-                if last == target { done = 1 }
-            }
-        }
-    }
-    if last != target {
-        if without == 1 {
-            fail("${msg} — condition still held after budget")
-        } else {
-            fail("${msg} — condition not met within budget")
-        }
-    }
-}
-
-// ---------------------------------------------------------------------------
-// Fluent assertion facade — subject-first, chainable
-//
-// The flat assert_*/expect_* matchers above are the primitive layer and
-// stay as-is. This facade is sugar on top, for tests that prefer the
-// Fowler-style fluent grammar the BDD community popularised:
-//
-//     aeocha.expect_int(count).to_equal(5).to_be_gt(0)
-//     aeocha.expect_str(name).to_contain("foo")
-//     aeocha.expect_int(x).not_().to_equal(5)
-//
-// How it works:
-//   - expect_int(v) / expect_str(v) return a small by-value subject
-//     record (the value + a negated flag).
-//   - each .to_* is a free function whose first parameter is the
-//     subject, so UFCS (aether #934) lets it be called as a method and
-//     return the subject again — that's the chain.
-//   - failures are reported via fail() against the AMBIENT framework
-//     (current_fw, set by init()), so the chain carries no `fw`. This
-//     relies on module-var state crossing the import boundary (#937).
-//   - not_() flips the next matcher's sense by returning a negated copy.
-//
-// Requires ae 0.328+ (both #934 and #937 fixed). Naming mirrors the
-// flat layer's int/string split (assert_eq vs assert_str_eq): int
-// matchers are unsuffixed, string matchers carry a distinguishing name.
-// Aether has no receiver-type overloading, so a single `to_equal` can't
-// serve both int and string subjects — expect_str uses to_equal_str.
-//
-// Single-framework caveat: the facade reads current_fw, so it asserts
-// against whichever framework init()'d last. Fine for the normal
-// one-framework-per-process test; the flat matchers remain the way to
-// drive two frameworks at once.
-// ---------------------------------------------------------------------------
-
-struct IntSubject { value: int, negated: int }
-struct StrSubject { value: string, negated: int }
-
-expect_int(v: int) -> IntSubject { return IntSubject { value: v, negated: 0 } }
-
-// expect_str COPIES v into the subject. The fluent chain outlives the
-// expect_str() call, so a caller-owned temporary — e.g. the freshly
-// built string returned by `expect_str(build_path(...))` — would be
-// freed before .to_equal_str() runs, and StrSubject.value would dangle
-// (a use-after-free that reads garbage). string.copy takes an owned
-// snapshot so the subject holds its own string end-to-end. int is
-// value-copied so expect_int needs no such guard. The copy lives until
-// process exit (one small string per expect_str, bounded by test count
-// — same lifetime policy as the rest of Aeocha's per-it allocations).
-expect_str(v: string) -> StrSubject { return StrSubject { value: string.copy(v), negated: 0 } }
-
-// not_() — flip the sense of the NEXT matcher in the chain.
-not_(s: IntSubject) -> IntSubject {
-    return IntSubject { value: s.value, negated: 1 }
-}
-
-// _verdict_int(ok) — shared verdict: given whether the positive
-// predicate held, report against the ambient fw honouring the negated
-// flag.
-_verdict_int(s: IntSubject, ok: int, what: string) {
-    if s.negated == 0 {
-        if ok == 0 { fail("expected ${what}") }
-    } else {
-        if ok == 1 { fail("expected NOT ${what}") }
-    }
-}
+not_(s: IntSubject) -> IntSubject { return spec.not_(s) }
 
 to_equal(s: IntSubject, want: int) -> IntSubject {
-    ok = 0
-    if s.value == want { ok = 1 }
-    _verdict_int(s, ok, "${want}, got ${s.value}")
-    return s
+    return spec.to_equal(s, want)
 }
 
 to_be_gt(s: IntSubject, bound: int) -> IntSubject {
-    ok = 0
-    if s.value > bound { ok = 1 }
-    _verdict_int(s, ok, "> ${bound}, got ${s.value}")
-    return s
+    return spec.to_be_gt(s, bound)
 }
 
 to_be_lt(s: IntSubject, bound: int) -> IntSubject {
-    ok = 0
-    if s.value < bound { ok = 1 }
-    _verdict_int(s, ok, "< ${bound}, got ${s.value}")
-    return s
+    return spec.to_be_lt(s, bound)
 }
 
-to_be_truthy(s: IntSubject) -> IntSubject {
-    ok = 0
-    if s.value != 0 { ok = 1 }
-    _verdict_int(s, ok, "truthy, got ${s.value}")
-    return s
-}
+to_be_truthy(s: IntSubject) -> IntSubject { return spec.to_be_truthy(s) }
 
-to_be_falsy(s: IntSubject) -> IntSubject {
-    ok = 0
-    if s.value == 0 { ok = 1 }
-    _verdict_int(s, ok, "falsy, got ${s.value}")
-    return s
-}
+to_be_falsy(s: IntSubject) -> IntSubject { return spec.to_be_falsy(s) }
 
-// String subject matchers. negated is honoured but there's no string
-// not_() yet — add one if a downstream test needs `.not_().to_contain`.
 to_equal_str(s: StrSubject, want: string) -> StrSubject {
-    if string.equals(s.value, want) == 0 {
-        fail("expected '${want}', got '${s.value}'")
-    }
-    return s
+    return spec.to_equal_str(s, want)
 }
 
 to_contain(s: StrSubject, needle: string) -> StrSubject {
-    if string.contains(s.value, needle) == 0 {
-        fail("'${s.value}' does not contain '${needle}'")
-    }
-    return s
+    return spec.to_contain(s, needle)
 }
 
 to_start_with(s: StrSubject, prefix: string) -> StrSubject {
-    if string.starts_with(s.value, prefix) == 0 {
-        fail("'${s.value}' does not start with '${prefix}'")
-    }
-    return s
+    return spec.to_start_with(s, prefix)
 }
 
-// satisfies(s, pred, msg) — fluent escape hatch (AssertJ-style). `pred`
-// takes the subject's value and returns 1 (ok) / 0 (fail). Lets a test
-// drop into an arbitrary one-off check mid-chain without defining a
-// whole new matcher:
-//   aeocha.expect_int(n).to_be_gt(0).satisfies(is_prime, "is prime")
-// `pred` is a top-level fn passed by bare name (works in closures /
-// across modules since aether #940/#943). One satisfies() per subject
-// type — Aether has no receiver-type overloading.
 satisfies(s: IntSubject, pred: fn, msg: string) -> IntSubject {
-    ok = 0
-    if call(pred, s.value) == 1 { ok = 1 }
-    _verdict_int(s, ok, "to satisfy '${msg}', got ${s.value}")
-    return s
+    return spec.satisfies(s, pred, msg)
 }
 
 satisfies_str(s: StrSubject, pred: fn, msg: string) -> StrSubject {
-    if call(pred, s.value) == 0 {
-        fail("'${s.value}' did not satisfy '${msg}'")
-    }
-    return s
+    return spec.satisfies_str(s, pred, msg)
 }
 
-// ---------------------------------------------------------------------------
-// Collection matchers (flat). Operate on a std.list of strings — the
-// common shape in tests (captured lines, names, ids). Tier-1 style:
-// plain functions that report via fail(), exactly like a user's own
-// custom matcher. Int lists are deliberately omitted (the raw list
-// stores pointers; an int-list convention would need boxing) — assert
-// on a string projection, or write a one-off matcher.
-// ---------------------------------------------------------------------------
-
-// expect_list_size(xs, want, msg) — the list has exactly `want` items.
 expect_list_size(xs: ptr, want: int, msg: string) {
-    n = list.size(xs)
-    if n != want {
-        fail("${msg} — expected ${want} items, got ${n}")
-    }
+    spec.expect_list_size(xs, want, msg)
 }
 
-// expect_list_empty(xs, msg) — the list has no items.
-expect_list_empty(xs: ptr, msg: string) {
-    n = list.size(xs)
-    if n != 0 {
-        fail("${msg} — expected empty list, got ${n} items")
-    }
-}
+expect_list_empty(xs: ptr, msg: string) { spec.expect_list_empty(xs, msg) }
 
-// expect_list_has_str(xs, needle, msg) — some element equals `needle`
-// (exact string match).
-// _list_has_str(xs, needle) -> 1 if some element equals needle, else 0.
-// Shared by the membership matchers below; never fails on its own.
-_list_has_str(xs: ptr, needle: string) -> int {
-    n = list.size(xs)
-    i = 0
-    while i < n {
-        item = list.get_raw(xs, i)
-        if string.equals(item, needle) == 1 {
-            return 1
-        }
-        i = i + 1
-    }
-    return 0
-}
-
-// expect_list_has_str(xs, needle, msg) — some element equals `needle`
-// (exact string match).
 expect_list_has_str(xs: ptr, needle: string, msg: string) {
-    if _list_has_str(xs, needle) == 0 {
-        fail("${msg} — list has no element equal to '${needle}'")
-    }
+    spec.expect_list_has_str(xs, needle, msg)
 }
 
-// expect_list_contains_all(xs, needles, msg) — every string in
-// `needles` (also a std.list of strings) appears somewhere in `xs`.
-// Order-independent and tolerant of extra elements in `xs` — the
-// containsInAnyOrder/hasItems shape. Reports the FIRST missing needle.
 expect_list_contains_all(xs: ptr, needles: ptr, msg: string) {
-    m = list.size(needles)
-    i = 0
-    while i < m {
-        want = list.get_raw(needles, i)
-        if _list_has_str(xs, want) == 0 {
-            fail("${msg} — list is missing '${want}'")
-            i = m
-        } else {
-            i = i + 1
-        }
-    }
+    spec.expect_list_contains_all(xs, needles, msg)
 }
 
-// expect_list_every(xs, pred, msg) — every element satisfies `pred`
-// (a fn(string)->1/0). The everyItem shape. Reports the first failing
-// element and its index. An empty list passes vacuously.
 expect_list_every(xs: ptr, pred: fn, msg: string) {
-    n = list.size(xs)
-    i = 0
-    while i < n {
-        item = list.get_raw(xs, i)
-        if call(pred, item) == 0 {
-            fail("${msg} — element ${i} ('${item}') failed the predicate")
-            i = n
-        } else {
-            i = i + 1
-        }
-    }
+    spec.expect_list_every(xs, pred, msg)
 }
 
 // ---------------------------------------------------------------------------
-// Runner — print summary, exit(1) if anything failed
+// Process matchers -> std.os.testing
 // ---------------------------------------------------------------------------
 
+expect_exit(exit_code: int, want: int, msg: string) {
+    testing.expect_exit(exit_code, want, msg)
+}
+
+expect_no_spawn_error(err: string, msg: string) {
+    testing.expect_no_spawn_error(err, msg)
+}
+
+expect_stdout_contains(out: string, needle: string, msg: string) {
+    testing.expect_stdout_contains(out, needle, msg)
+}
+
+expect_stderr_contains(err: string, needle: string, msg: string) {
+    testing.expect_stderr_contains(err, needle, msg)
+}
+
+expect_stderr_empty(err: string, msg: string) {
+    testing.expect_stderr_empty(err, msg)
+}
+
+expect_stdout_line_count(out: string, want: int, msg: string) {
+    testing.expect_stdout_line_count(out, want, msg)
+}
+
+expect_stdout_line_field(out: string, prefix: string,
+                          n: int, want: string, msg: string) {
+    testing.expect_stdout_line_field(out, prefix, n, want, msg)
+}
+
+expect_stdout_line_after(out: string, prefix: string,
+                          want: string, msg: string) {
+    testing.expect_stdout_line_after(out, prefix, want, msg)
+}
+
+expect_stdout_matches(out: string, pattern: string, msg: string) {
+    testing.expect_stdout_matches(out, pattern, msg)
+}
+
+expect_stdout_matches_regex(out: string, pattern: string, msg: string) {
+    testing.expect_stdout_matches_regex(out, pattern, msg)
+}
+
+// ---------------------------------------------------------------------------
+// HTTP matchers + floating modifier -> std.http.client.httptest
+// ---------------------------------------------------------------------------
+
+// The one-shot retry cells (within/without budgets) live in httptest's
+// module vars now; these forwarders keep the ambient scoping working
+// across the aeocha namespace exactly as before.
+within(budget: Duration) { httptest.within(budget) }
+
+within_poll(budget: Duration, poll: Duration) {
+    httptest.within_poll(budget, poll)
+}
+
+without(budget: Duration) { httptest.without(budget) }
+
+without_poll(budget: Duration, poll: Duration) {
+    httptest.without_poll(budget, poll)
+}
+
+eventually(pred: fn, msg: string) { httptest.eventually(pred, msg) }
+
+expect_http_status(resp: ptr, want: int, msg: string) {
+    httptest.expect_http_status(resp, want, msg)
+}
+
+expect_http_no_error(resp: ptr, msg: string) {
+    httptest.expect_http_no_error(resp, msg)
+}
+
+expect_http_body_contains(resp: ptr, needle: string, msg: string) {
+    httptest.expect_http_body_contains(resp, needle, msg)
+}
+
+expect_http_body_eq(resp: ptr, want: string, msg: string) {
+    httptest.expect_http_body_eq(resp, want, msg)
+}
+
+expect_http_header(resp: ptr, name: string, want: string, msg: string) {
+    httptest.expect_http_header(resp, name, want, msg)
+}
+
+expect_http_body_json_field(resp: ptr, key: string,
+                              want: string, msg: string) {
+    httptest.expect_http_body_json_field(resp, key, want, msg)
+}
+
+expect_http_get_status(url: string, want_status: int, msg: string) {
+    httptest.expect_http_get_status(url, want_status, msg)
+}
+
+expect_http_get_body_eq(url: string, want: string, msg: string) {
+    httptest.expect_http_get_body_eq(url, want, msg)
+}
+
+expect_http_get_body_contains(url: string, needle: string, msg: string) {
+    httptest.expect_http_get_body_contains(url, needle, msg)
+}
+
+expect_http_post_status(url: string, want_status: int, msg: string) {
+    httptest.expect_http_post_status(url, want_status, msg)
+}
+
+expect_http_post_ok(url: string, msg: string) {
+    httptest.expect_http_post_ok(url, msg)
+}
+
+// ---------------------------------------------------------------------------
+// run_summary — the one hybrid: aeb IPC report (KEPT here), then the
+// std.spec summary for the human output / counter frees / exit code.
+// ---------------------------------------------------------------------------
+
+// The IPC block runs FIRST because spec.run_summary frees the counter
+// refs and exit(1)s on failure — a failing run must still deliver its
+// report to the parent. Counters are read through fw (never through a
+// local ambient cell — that cell lives in std.spec now).
 run_summary(fw: ptr) {
-    passed_ref = map_get_raw(fw, "passed")
-    failed_ref = map_get_raw(fw, "failed")
-    depth_ref = map_get_raw(fw, "depth")
-    passed = ref_get(passed_ref)
-    failed = ref_get(failed_ref)
-
-    println("")
-    if failed == 0 {
-        println("\x1b[32m  ${passed} passing\x1b[0m")
-    } else {
-        println("\x1b[32m  ${passed} passing\x1b[0m")
-        println("\x1b[31m  ${failed} failing\x1b[0m")
-    }
-    println("")
-
     // Structured per-it report — only emitted when invoked under
     // a parent that opened a back-channel (e.g. aeb's
     // driver_test). When `ae run foo.ae` from a terminal, the
@@ -1524,20 +373,18 @@ run_summary(fw: ptr) {
     // aeocha-aeb-ipc-reporting.md for the full spec.
     ch = ipc.parent_channel()
     if ch >= 0 {
+        passed = ref_get(map.get_raw(fw, "passed"))
+        failed = ref_get(map.get_raw(fw, "failed"))
         report = _format_aeb_report(fw, passed, failed)
         // ae_fd_write + ae_fd_close mirror std.ipc.write_close
-        // semantics. Inline-extern'd at the top of this file.
+        // semantics.
         net.fd_write(ch, report)
         net.fd_close(ch)
     }
 
-    ref_free(passed_ref)
-    ref_free(failed_ref)
-    ref_free(depth_ref)
-
-    if failed > 0 {
-        exit(1)
-    }
+    // Human ✓/✗ totals, AE_SPEC_FORMAT report (if requested), counter
+    // ref frees, and exit(1) on failure.
+    spec.run_summary(fw)
 }
 
 // Build the structured report payload for the aeb back-channel.
@@ -1567,6 +414,10 @@ run_summary(fw: ptr) {
 // errored is always 0 in v1 — Aeocha categorises everything as
 // PASS or FAIL today. Reserved in the schema for future
 // enrichment (assertion threw, before_each crashed, etc.).
+//
+// Reads only fw slots that spec.init() stamps ("its",
+// "t_start_ns_str") — the fw map layout is std.spec's, unchanged from
+// the pre-thinning aeocha one.
 _format_aeb_report(fw: ptr, passed: int, failed: int) -> string {
     its = map.get_raw(fw, "its")
     n = list.size(its)
@@ -1577,10 +428,6 @@ _format_aeb_report(fw: ptr, passed: int, failed: int) -> string {
     total_duration_ns = os.now_monotonic_ns() - t_start_ns
     total_duration_ms = total_duration_ns / 1000000
 
-    // Header KV block. Numbers fold via string interpolation —
-    // ${x} is the same path the existing aeocha print() calls
-    // already use, so no extra extern needed.
-    //
     // Wire compatibility: version stays 1 and duration_ms is retained
     // so existing v1 parsers keep working. duration_ns is ADDED for
     // full precision (4e) — a fast run that rounds to duration_ms=0
@@ -1612,7 +459,7 @@ _format_aeb_report(fw: ptr, passed: int, failed: int) -> string {
 }
 
 // Build the per-it rows, optionally including the
-// failure_message (if any) and duration_ms columns. Used by
+// failure_message (if any) and duration columns. Used by
 // _format_aeb_report's progressive truncation.
 //
 // Built through std.strbuilder rather than a `string.concat`
@@ -1637,7 +484,7 @@ _build_rows(its: ptr, n: int, with_msg: int, with_dur: int) -> string {
         strbuilder.append_byte(b, 34)
 
         if with_dur != 0 {
-            // Per-row duration is now nanoseconds (4e): full precision,
+            // Per-row duration is nanoseconds (4e): full precision,
             // so sub-ms tests don't all report 0. The v1 row consumer
             // matches on STATUS/index/"name"/message and does not parse
             // the duration value, so widening ms->ns is wire-safe.

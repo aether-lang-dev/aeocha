@@ -1,5 +1,13 @@
 # Aeocha TODO
 
+> **Post-thinning note (2026-08-14):** stage 3 of `deprecation_notice.md` is
+> executed — `aeocha.ae` is now a compatibility facade over `std.spec`,
+> `std.os.testing`, and `std.http.client.httptest` (aether PR #1574), keeping
+> only the aeb IPC report and `contrib/mutate`. Items below that concern
+> matcher/framework *features* are therefore historical or belong upstream
+> against `std/spec/module.ae`; only IPC-reporting, mutation-testing, and
+> repo-infrastructure items remain actionable here.
+
 ## Refinement / Future work
 
 3a. **[DONE — ae 0.328+]** Ambient `fw` (dropped from matchers). `init()` stashes
@@ -13,7 +21,12 @@ signatures + 47 internal `fail()` call sites + the self-test + both integration 
 second `init()` rebinds `current_fw`; the old fw-threaded multi-framework mode is gone.
 Suite green on 0.329.
 
-3b. **Consider taking Aeocha back to the Aether repo and bundling.** Aeocha is a single self-contained file (`aeocha.ae`) with no `contrib` deps, no raw externs, and only `std.*` imports — a plain assertion test builds to a libc-only binary (verified via `ldd`). That makes it a natural candidate to live in-tree (e.g. `contrib/aeocha/` again) and ship with the compiler so downstream Aether projects get it without copying the file onto their include path. Tradeoff: independent release cadence + the "no upward deps in tests" boundary are easier to keep when it's a standalone repo; bundling couples Aeocha's version to the compiler's. Decide which matters more before moving.
+3b. **[RESOLVED — the std port]** Consider taking Aeocha back to the Aether repo
+and bundling. This happened, in the stronger form: the framework core and all
+matcher families were ported into the stdlib itself (`std.spec`,
+`std.os.testing`, `std.http.client.httptest` — aether PR #1574), not as a
+bundled `contrib/aeocha`. This repo remains the standalone facade carrying the
+aeb IPC report and `contrib/mutate` (see deprecation_notice.md).
 
 3c. **[DONE — ae 0.328]** Fluent assertion facade. Subject-first, chainable,
 alongside the flat matchers: `expect_int(x).to_equal(5).to_be_gt(0)`,
@@ -32,8 +45,10 @@ and reports via `fail` against the ambient `current_fw` cell. Shipped in
   happy path never reads `current_fw`, so STALE-CACHE happy-green ghosts masked a
   broken ambient cell. Always `rm -rf ~/.aether/cache` and test a FAIL path.
 
-  Still open: combine with 4f for `within(5s).expect(resp).status(200)`; add a
-  string `not_()` and `expect_ptr` if downstream tests want them.
+  Still open — but now against `std/spec/module.ae`, not here: combine with 4f
+  for `within(5s).expect(resp).status(200)`; add a string `not_()` and
+  `expect_ptr` if downstream tests want them. The optional-why-message ask
+  moved upstream as aether#1576.
 
 ## Timing & Duration (leveraging the first-class `Duration` type)
 
@@ -195,21 +210,24 @@ in 0.331, so the disambiguation escape hatch exists too. README shows the workin
 pattern. Nothing left blocked here.
 
 5d. **Hamcrest-style matcher combinators** (`allOf`/`anyOf`/`is(not(...))` as
-matcher *values*) — deliberate non-goal for now. Needs matcher-as-a-value (a struct
-carrying predicate + self-description); large design effort, and soft-assert already
-covers most of the need (write several `expect_` calls; they all report). Reopen if
-demand appears.
+matcher *values*) — deliberate non-goal for now, and if demand appears the home
+is `std/spec/module.ae`. Needs matcher-as-a-value (a struct carrying predicate +
+self-description); large design effort, and soft-assert already covers most of
+the need (write several `expect_` calls; they all report).
 
 5e. **[PARTIALLY DONE]** More content matchers. Shipped: `assert_str_eq_diff`
 (Jest-style — caret under the first differing byte, aligned to a fixed 19-char
 value column; ASCII byte index), `expect_list_contains_all` (containsInAnyOrder),
-`expect_list_every` (everyItem, vacuous-pass on empty). Still open: `extracting`/
-map-then-assert (a list-projection helper), and the caret diff is byte- not
-codepoint-aware (fine for ASCII test output; revisit if multibyte values matter).
+`expect_list_every` (everyItem, vacuous-pass on empty). Still open — against
+`std/spec/module.ae` now: `extracting`/map-then-assert (a list-projection
+helper), and the caret diff is byte- not codepoint-aware (fine for ASCII test
+output; revisit if multibyte values matter).
 
 ## Pending Migrations
 
-Once Aeocha is importable + bare-callable, migrate the existing hand-rolled `exit(1)` test files to it:
+These are aether-repo files, and with `std.spec` in-tree they should migrate to
+`import std.spec` directly (no aeocha dependency needed) — so this item now
+belongs in the aether repo's backlog, kept here only until it lands there:
 
 - `contrib/tinyweb/test_integration.ae`
 - `contrib/tinyweb/test_inventory.ae`

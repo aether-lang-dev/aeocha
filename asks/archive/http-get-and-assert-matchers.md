@@ -1,7 +1,8 @@
 # Ask: high-level GET-and-assert HTTP matchers
 
 **Requested by:** the `aeo` orchestrator's integration tests (downstream
-consumer). **Status:** implemented (2026-06-21).
+consumer). **Status:** delivered — shipped in aeocha 2026-06-21, since
+ported to `std.http.client.httptest` (aether PR #1574). Archived.
 
 ## Summary
 
