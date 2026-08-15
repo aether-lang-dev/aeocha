@@ -11,9 +11,12 @@ Aeocha is a BDD-style test framework for Aether. As of 2026-08-14 it is **thinne
 
 Behavioral principles for those surfaces (matcher semantics, retry gotchas, monotonic-clock rules, glob-vs-regex, stdout-vs-stderr slots) are documented in the std modules themselves and aether's docs/testing.md — maintain them THERE, not here.
 
-## What still lives in this repo — and must not be deleted
-1. **Mutation testing** (`contrib/mutate/`) — source-rewriting tool, not a library surface. Its oracle reads the `version=1` report via the env-file transport: it runs each mutant's test binary with `AE_SPEC_FORMAT=aeocha AE_SPEC_REPORT=<bin>.report` set and parses `failed=N` from the file. Tests: `tests/integration/aeocha_mutation/`. An ask proposing its adoption into aether's std tree is filed (`aether/asks/aeocha-mutate-in-std-mutation-testing.md`); it stays here until that lands and releases.
-2. **The Cucumber plan** (`cucumber-plan.md`) — unbuilt design proposal.
+## What still lives in this repo
+1. **The Cucumber plan** (`cucumber-plan.md`) — unbuilt design proposal; the only non-facade content left. If it ever gets built, its home is aether (std.spec's repo), not here.
+
+**Mutation testing is GONE from here** (2026-08-15): adopted upstream as `std.mutation` in aether 0.540.0 (`mutation.run(sut, test, lib_dir)`, runnable front-end at aether `examples/mutation-testing/mutate.ae`, docs/mutation-testing.md). The two deterministic regression fixtures moved with it (`aether tests/integration/mutation_testing/`). `contrib/` and `tests/integration/aeocha_mutation*` are deleted.
+
+**Facade policy — frozen at the 0.538 surface.** New std.spec features are deliberately NOT forwarded: e.g. 0.542 gave the fluent value matchers an optional trailing why-message (`to_equal(s, want, msg)`, closing aether#1576) — aeocha's forwarders stay 2-arg, so a consumer wanting the message imports std.spec. The facade exists to keep OLD code compiling, and the mild pressure toward std.spec is intentional.
 
 **The aeb IPC back-channel is RETIRED** (2026-08-15). The `version=1` format lives on as a documented, versioned contract in aether docs/testing.md (0.539), produced by `spec._format_aeocha_v1` via the `AE_SPEC_FORMAT`/`AE_SPEC_REPORT` env pair; aeb's `driver_test` consumes it that way since aeb 009c830. `run_summary` here is now a pure forwarder — old aeb versions that only drained the IPC pipe fall back to exit-code granularity, which is their documented no-report path.
 
@@ -28,13 +31,13 @@ Behavioral principles for those surfaces (matcher semantics, retry gotchas, mono
 - **Compiler**: needs an `ae` whose stdlib HAS the three modules — **aether 0.538.0+** (PR #1574, released 2026-08-14; pinned in README). Older toolchains *silently tolerate* `import std.spec` but every `spec.*` call fails as undefined — don't be fooled by a passing bare-import probe. A branch-parity build also lives at `/home/paul/scm/aether/build/ae` if the installed `ae` is older.
 - **Module resolution / include path**: `ae` resolves a bare `import aeocha` from the cwd or from `AETHER_LIB_DIR` / `--lib` (PATH-style). It does NOT walk up from the source file, and `AETHER_INCLUDE_PATH` is not a real variable. `std.*` imports resolve from the toolchain, not from lib dirs — pointing `AETHER_LIB_DIR` at an aether checkout does not get you its stdlib.
 - **STALE CACHE — bites hard**: `~/.aether/cache` does NOT invalidate when an imported module's source changes. After editing `aeocha.ae` (or switching toolchains), `rm -rf ~/.aether/cache` or you will debug a ghost. And always test a FAIL path — the happy path never exercises the ambient `current_fw` cell, so a broken cell shows all-green.
-- **Integration tests**: `./tests/integration/*/test_*.sh` (they take `ae` from PATH — prepend `/home/paul/scm/aether/build` until the release lands). The `aeocha_mutation` ones run `contrib/mutate` against deterministic fixtures (expects `1/2 … 50%`, MUL->DIV survivor, md5-identical restore); the fixture comments avoid padded operators on purpose — keep operator tokens out of their prose.
+- **Integration tests**: `./tests/integration/aeocha_expect_matchers/test_aeocha_expect_matchers.sh` — the one suite left, a smoke of the matcher forwarders against real subprocesses and an in-process `std.http` fixture server. (The mutation regressions moved to aether with `std.mutation`.)
 - **Bootstrap**: `./bootstrap_aether.sh` for contributors with no suitable `ae`: release-first fallback, caches toolchains under `.aether/toolchains/`, prints the PATH export. `AETHER_VERSION` pins; `AEOCHA_AETHER_SOURCE=1` forces source build.
 
 ## Files/dirs worth knowing
 - `aeocha.ae`: the facade — pure forwarders, nothing else.
 - `deprecation_notice.md`: what moved where, and why the keeps are keeps.
-- `tests/integration/`: expect-matchers smoke, mutation regression (which also exercises the env-file report path).
+- `tests/integration/`: expect-matchers smoke (the only suite left here).
 - `tests/regression/`: compiler-feature regressions Aeocha exercises.
 - `example_self_test.ae`: how to use the framework; also the facade's broadest test.
 - `asks/archive/`: delivered/relocated asks (the fluent why-message ask became aether#1576).

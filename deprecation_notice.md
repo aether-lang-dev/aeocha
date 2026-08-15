@@ -7,6 +7,17 @@ branch as a verbatim port; aeocha's copies are now duplicates that will
 drift. This note says what to delete from `aeocha.ae`, what MUST stay
 because it has no stdlib home yet, and the order to do it in.
 
+**EMPTIED 2026-08-15**: aether adopted the mutation tester as
+`std.mutation` (0.540.0, released) — with the runnable front-end, both
+regression fixtures, and docs — and 0.542.0 landed the fluent
+why-message (#1576, the last open aeocha-origin ask). `contrib/` and
+the mutation tests are deleted here. **This repo is now facade-only**:
+`aeocha.ae` (pure forwarders, frozen at the 0.538 surface),
+`cucumber-plan.md` (unbuilt proposal), and repo infrastructure.
+Archival is gated solely on the downstream `import aeocha` migrations
+(aeo, aether-ui, avn — which is on the pre-spinout `contrib.aeocha`
+path — fbs-core, aeci, fight_flash_fraud).
+
 **CONVERGED 2026-08-15**: KEEP-item 1 below (the aeb IPC back-channel)
 is now RETIRED too. The transports converged the other way — aether
 0.539 documents the `AE_SPEC_REPORT` aeocha-v1 format as a versioned
@@ -57,11 +68,13 @@ Name chosen per Go's `net/http/httptest`.)
 2. **Mutation testing** (`contrib/mutate/`). A source-rewriting tool,
    not a library surface. If it ever moves to aether it becomes an
    `ae mutate` subcommand — different discussion entirely.
-   *(Update 2026-08-15: that discussion is now open — an ask proposing
-   adoption into aether's std tree is filed as
-   `aether/asks/aeocha-mutate-in-std-mutation-testing.md`. Once it lands
-   and releases, `contrib/mutate` deletes here and this repo is eligible
-   for archival, pending the downstream `import aeocha` migrations.)*
+   *(Update 2026-08-15: RESOLVED — the ask was filed and aether adopted
+   it the same day as `std.mutation` (0.540.0): `mutation.run(sut, test,
+   lib_dir)`, a runnable front-end at `examples/mutation-testing/`, the
+   two regression fixtures at `tests/integration/mutation_testing/`, and
+   docs/mutation-testing.md. `contrib/mutate` and its tests are deleted
+   here. The repo is now facade-only — archival is gated solely on the
+   downstream `import aeocha` migrations.)*
 
 3. **The Cucumber plan** (`cucumber-plan.md`) — unbuilt design
    proposal; nothing to port.

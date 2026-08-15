@@ -21,16 +21,17 @@
 // it, so mixing aeocha.* and spec.* calls in one process stays
 // coherent.
 //
-// What still LIVES here (no stdlib home): contrib/mutate — mutation
-// testing (a source-rewriting tool, not a library surface).
+// NOTHING lives only here anymore. Mutation testing moved upstream as
+// std.mutation (aether 0.540.0). The aeb IPC back-channel report is
+// RETIRED: the version=1 format survives as std.spec's env-file
+// transport — a documented, versioned contract (aether docs/testing.md,
+// 0.539): a parent sets AE_SPEC_FORMAT=aeocha + AE_SPEC_REPORT=<path>
+// and spec.run_summary (which ours forwards to) writes the report
+// there. aeb's driver_test (aeb 009c830+) consumes it that way.
 //
-// The aeb IPC back-channel report is RETIRED (it was the last real code
-// here). The version=1 report format survives, but as std.spec's
-// env-file transport — a documented, versioned contract (aether
-// docs/testing.md, 0.539): a parent sets AE_SPEC_FORMAT=aeocha +
-// AE_SPEC_REPORT=<path> and spec.run_summary (which ours forwards to)
-// writes the report there. aeb's driver_test (aeb 009c830+) and
-// contrib/mutate both consume it that way now.
+// This facade is FROZEN at the 0.538 std.spec surface: newer std
+// features (e.g. 0.542's optional why-message on the fluent matchers)
+// are deliberately not forwarded — import std.spec to use them.
 //
 // Usage (unchanged):
 //

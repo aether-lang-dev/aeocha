@@ -1,12 +1,14 @@
 # Aeocha TODO
 
-> **Post-thinning note (2026-08-14):** stage 3 of `deprecation_notice.md` is
-> executed — `aeocha.ae` is now a compatibility facade over `std.spec`,
-> `std.os.testing`, and `std.http.client.httptest` (aether PR #1574), keeping
-> only the aeb IPC report and `contrib/mutate`. Items below that concern
-> matcher/framework *features* are therefore historical or belong upstream
-> against `std/spec/module.ae`; only IPC-reporting, mutation-testing, and
-> repo-infrastructure items remain actionable here.
+> **Post-thinning note (2026-08-14, updated 2026-08-15):** stage 3 of
+> `deprecation_notice.md` is executed and then some — `aeocha.ae` is a
+> pure-forwarder facade over `std.spec`, `std.os.testing`, and
+> `std.http.client.httptest`; the aeb IPC report is retired (env-file
+> transport, aether 0.539 contract); and mutation testing moved upstream
+> as `std.mutation` (aether 0.540.0). NOTHING in this file is actionable
+> here anymore — feature items belong against aether's std tree; the
+> repo's only remaining work is the downstream `import aeocha`
+> migrations, after which it archives. This file is a historical record.
 
 ## Refinement / Future work
 
@@ -24,9 +26,10 @@ Suite green on 0.329.
 3b. **[RESOLVED — the std port]** Consider taking Aeocha back to the Aether repo
 and bundling. This happened, in the stronger form: the framework core and all
 matcher families were ported into the stdlib itself (`std.spec`,
-`std.os.testing`, `std.http.client.httptest` — aether PR #1574), not as a
-bundled `contrib/aeocha`. This repo remains the standalone facade carrying the
-aeb IPC report and `contrib/mutate` (see deprecation_notice.md).
+`std.os.testing`, `std.http.client.httptest` — aether PR #1574; mutation
+testing followed as `std.mutation` in 0.540.0), not as a bundled
+`contrib/aeocha`. This repo remains only as the compatibility facade
+(see deprecation_notice.md).
 
 3c. **[DONE — ae 0.328]** Fluent assertion facade. Subject-first, chainable,
 alongside the flat matchers: `expect_int(x).to_equal(5).to_be_gt(0)`,
@@ -162,7 +165,7 @@ idiomatic-BDD shape. (Implementation term: the ambient cell described below.)
 
 ## Adjacent tools
 
-6a. **[DONE]** Mutation testing — `contrib/mutate/mutate.ae`. An outer driver
+6a. **[DONE — since MOVED UPSTREAM as `std.mutation`, aether 0.540.0; `contrib/mutate` and its regression tests are deleted from this repo]** Mutation testing — `contrib/mutate/mutate.ae`. An outer driver
 (Aether) that perturbs a SUT one padded-operator at a time, clears the cache, and
 classifies each mutant via Aeocha's STRUCTURED report (not just an exit code):
 `ae check` (no-compile gate) → `ae build` → run + drain the `version=1` report off

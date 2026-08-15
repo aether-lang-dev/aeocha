@@ -8,12 +8,16 @@ Most of it now ships inside Aether's own stdlib — `std.spec` (framework core,
 asserts, fluent chain), `std.os.testing` (process matchers), and
 `std.http.client.httptest` (HTTP matchers, `within`/`without`, `eventually`).
 `aeocha.ae` is a thin compatibility facade forwarding to those modules, so
-existing `import aeocha` code keeps working unchanged; new projects can
-`import std.spec` directly. What only Aeocha has: mutation testing
-(`contrib/mutate`). Structured `version=1` test reports (used by
-[aeb](https://github.com/aether-lang-org/aeb) and `contrib/mutate`) come from
-`std.spec`'s documented env-file transport — set `AE_SPEC_FORMAT=aeocha` and
-`AE_SPEC_REPORT=<path>`. See [deprecation_notice.md](deprecation_notice.md).
+existing `import aeocha` code keeps working unchanged; new projects should
+`import std.spec` directly. Nothing lives only here anymore: mutation
+testing moved upstream as `std.mutation` (aether 0.540.0+, see aether's
+docs/mutation-testing.md), and structured `version=1` test reports (used by
+[aeb](https://github.com/aether-lang-org/aeb)) come from `std.spec`'s
+documented env-file transport — set `AE_SPEC_FORMAT=aeocha` and
+`AE_SPEC_REPORT=<path>`. The facade is frozen at the 0.538 surface: newer
+std.spec features (e.g. 0.542's optional why-message on fluent matchers)
+are deliberately not forwarded — adopt them by importing `std.spec`. See
+[deprecation_notice.md](deprecation_notice.md).
 
 ```aether
 import aeocha

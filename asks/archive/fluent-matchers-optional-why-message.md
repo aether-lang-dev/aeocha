@@ -1,10 +1,13 @@
 # Ask: an optional "why" message on the fluent matchers
 
 **Requested by:** the `aeo` orchestrator's specs (downstream consumer).
-**Status:** moved upstream (2026-08-14) — the fluent chain now lives in
-`std/spec/module.ae`, so this ask was refiled as
-[aether#1576](https://github.com/aether-lang-dev/aether/issues/1576).
-Archived here for provenance; originally requested 2026-06-28.
+**Status:** DELIVERED upstream — refiled as
+[aether#1576](https://github.com/aether-lang-dev/aether/issues/1576)
+on 2026-08-14 and landed in aether 0.542.0: the fluent value matchers
+take an optional trailing `msg` (default arguments resolve through
+UFCS chaining, so neither breaking sweep nor `*_because` variants were
+needed), and `to_equal_str` upgrades to the caret-aligned diff at ≥24
+chars. Archived here for provenance; originally requested 2026-06-28.
 
 ## Summary
 
