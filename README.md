@@ -63,7 +63,7 @@ An Aether module search directory must contain `aeocha.ae`. Clone or vendor the
 repository, then point `AETHER_LIB_DIR` at it:
 
 ```bash
-git clone https://github.com/aether-lang-org/aeocha.git /path/to/aeocha
+git clone https://github.com/aether-lang-dev/aeocha.git /path/to/aeocha
 export AETHER_LIB_DIR=/path/to/aeocha
 ```
 

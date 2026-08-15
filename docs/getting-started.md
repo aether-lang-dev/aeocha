@@ -15,7 +15,7 @@ fallback, not the normal prerequisite for using Aeocha.
 Aeocha itself must be in a module search directory:
 
 ```bash
-git clone https://github.com/aether-lang-org/aeocha.git /path/to/aeocha
+git clone https://github.com/aether-lang-dev/aeocha.git /path/to/aeocha
 export AETHER_LIB_DIR=/path/to/aeocha
 ```
 

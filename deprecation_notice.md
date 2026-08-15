@@ -10,10 +10,9 @@ because it has no stdlib home yet, and the order to do it in.
 **EXECUTED 2026-08-14**: stage 3 below is done — `aeocha.ae` is the
 forwarder facade (1667 → ~465 lines), all suites green against the
 branch-built toolchain (`/home/paul/scm/aether/build/ae`), asks/TODO
-swept (the fluent why-message ask became aether#1576). The one
-precondition still outstanding: the aether PR (#1574) has not merged/
-released yet, so the README carries a placeholder instead of a pinned
-minimum version — pin it when the release lands. Note the type
+swept (the fluent why-message ask became aether#1576). The precondition
+cleared the same night: PR #1574 merged and released as aether
+**0.538.0** (2026-08-14), now pinned in the README. Note the type
 re-export worry in item 3 turned out moot: re-exporting spec's
 `IntSubject`/`StrSubject` through `exports(...)` works, including
 consumers naming them in type positions.
