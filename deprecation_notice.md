@@ -7,6 +7,17 @@ branch as a verbatim port; aeocha's copies are now duplicates that will
 drift. This note says what to delete from `aeocha.ae`, what MUST stay
 because it has no stdlib home yet, and the order to do it in.
 
+**CONVERGED 2026-08-15**: KEEP-item 1 below (the aeb IPC back-channel)
+is now RETIRED too. The transports converged the other way — aether
+0.539 documents the `AE_SPEC_REPORT` aeocha-v1 format as a versioned
+contract, aeb's `driver_test` adopted it (aeb 009c830: sets the env
+pair, reads the file when the pipe is empty), and `contrib/mutate`
+migrated to the same transport. `run_summary` is a pure forwarder;
+`_format_aeb_report`/`_build_rows` and the
+`aeocha_aeb_ipc_reporting` test are deleted. `aeocha.ae` is 100%
+forwarders (~357 lines); only `contrib/mutate` remains as real code in
+this repo.
+
 **EXECUTED 2026-08-14**: stage 3 below is done — `aeocha.ae` is the
 forwarder facade (1667 → ~465 lines), all suites green against the
 branch-built toolchain (`/home/paul/scm/aether/build/ae`), asks/TODO

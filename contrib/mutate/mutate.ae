@@ -9,8 +9,9 @@
 // by the time any test executes, so mutation can't happen in-process —
 // it must edit the SUT *source on disk*, rebuild, and re-run the suite,
 // once per mutant. Aeocha is the oracle, via its STRUCTURED report (not
-// just an exit code): the driver builds the test to a binary, runs it,
-// and drains the `version=1` report off the IPC channel, reading
+// just an exit code): the driver builds the test to a binary, runs it
+// with AE_SPEC_FORMAT/AE_SPEC_REPORT set, and reads the `version=1`
+// report file, reading
 // `failed=N`. That lets it classify three outcomes — killed (a test
 // failed), survived (suite passed → a test gap), and no-compile (the
 // mutation produced invalid code, excluded from the score) — so a
@@ -68,11 +69,12 @@ const NOCOMPILE = 2
 //      imported module fails to compile and links a stale/valid version
 //      (aether #953). `check` honestly reports the import error.
 //   2. ae build the test to a binary.
-//   3. run it via run_pipe_drain_and_wait, which inherits a parent IPC
-//      channel; Aeocha's run_summary emits a `version=1` report through
-//      it. We parse `failed=N` from the header: N>0 => KILLED, N==0 =>
-//      SURVIVED. This uses Aeocha's structured report rather than
-//      scraping stdout or trusting only an exit code.
+//   3. run it with AE_SPEC_FORMAT=aeocha + AE_SPEC_REPORT=<file> set —
+//      std.spec's run_summary (which aeocha forwards to) writes the
+//      `version=1` report to that file (the documented env-file
+//      transport, aether docs/testing.md). We parse `failed=N` from the
+//      header: N>0 => KILLED, N==0 => SURVIVED. This uses the structured
+//      report rather than scraping stdout or trusting only an exit code.
 //
 // Cache is cleared first every time — an imported-module edit does not
 // invalidate ~/.aether/cache, so without this every mutant would be
@@ -100,19 +102,25 @@ _oracle(test_path: string, incl: string, bin: string) -> int {
         return NOCOMPILE
     }
 
-    // (3) run + drain the structured report. We spawn the binary
-    // through `/bin/sh -c "exec <bin> >/dev/null 2>&1"` so the child's
-    // own ✓/✗ test output is silenced — the report still arrives on the
-    // inherited IPC channel (fd 3), which the redirect leaves untouched.
-    // Without this, every mutant's full Aeocha run would print to our
-    // terminal.
+    // (3) run + read the structured report. We spawn the binary
+    // through `/bin/sh -c "... exec <bin> >/dev/null 2>&1"` so the
+    // child's own ✓/✗ test output is silenced; the AE_SPEC_* env pair
+    // (assignments before `exec` apply to the exec'd program) makes
+    // run_summary write the report to a sibling file the redirect
+    // can't touch. A mutant that crashes before run_summary leaves no
+    // file — fs.read yields "" and _report_failed returns -1, which
+    // classifies as SURVIVED, exactly as the empty report did before.
+    rpt = "${bin}.report"
+    os_system("rm -f '${rpt}'")
     argv = list.new()
     list.add(argv, "-c")
-    list.add(argv, "exec '${bin}' >/dev/null 2>&1")
-    report, _, drain_err = os.run_pipe_drain_and_wait("/bin/sh", argv, null)
+    list.add(argv, "AE_SPEC_FORMAT=aeocha AE_SPEC_REPORT='${rpt}' exec '${bin}' >/dev/null 2>&1")
+    _pipe, _rc, drain_err = os.run_pipe_drain_and_wait("/bin/sh", argv, null)
     if string.equals(drain_err, "") == 0 {
         return NOCOMPILE
     }
+    report, _rerr = fs.read(rpt)
+    os_system("rm -f '${rpt}'")
     failed = _report_failed(report)
     if failed > 0 { return KILLED }
     return SURVIVED

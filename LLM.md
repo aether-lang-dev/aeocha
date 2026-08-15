@@ -12,9 +12,10 @@ Aeocha is a BDD-style test framework for Aether. As of 2026-08-14 it is **thinne
 Behavioral principles for those surfaces (matcher semantics, retry gotchas, monotonic-clock rules, glob-vs-regex, stdout-vs-stderr slots) are documented in the std modules themselves and aether's docs/testing.md — maintain them THERE, not here.
 
 ## What still lives in this repo — and must not be deleted
-1. **The aeb IPC reporting back-channel.** `run_summary(fw)` here is a hybrid: it writes the pinned `version=1` KV+tab report to `ipc.parent_channel()` (via `_format_aeb_report` + `_build_rows`, with the 60 KB fallback tiers full → no-msg → minimal → header-only), THEN forwards to `spec.run_summary(fw)` for the human totals / counter frees / exit(1). Order matters: spec frees the counter refs and exits on failure, so the IPC block runs first and reads counters through `fw` (never through an ambient cell — that cell lives in std.spec now). This is aeb `driver_test`'s contract; std.spec's `ae test --format` transport (env-file via `AE_SPEC_FORMAT`/`AE_SPEC_REPORT`) is a DIFFERENT, parallel mechanism. Keep `duration_ms=` in the header or you break v1 parsers. Test: `tests/integration/aeocha_aeb_ipc_reporting/`.
-2. **Mutation testing** (`contrib/mutate/`) — source-rewriting tool, not a library surface.
-3. **The Cucumber plan** (`cucumber-plan.md`) — unbuilt design proposal.
+1. **Mutation testing** (`contrib/mutate/`) — source-rewriting tool, not a library surface. Its oracle reads the `version=1` report via the env-file transport: it runs each mutant's test binary with `AE_SPEC_FORMAT=aeocha AE_SPEC_REPORT=<bin>.report` set and parses `failed=N` from the file. Tests: `tests/integration/aeocha_mutation/`.
+2. **The Cucumber plan** (`cucumber-plan.md`) — unbuilt design proposal.
+
+**The aeb IPC back-channel is RETIRED** (2026-08-15). The `version=1` format lives on as a documented, versioned contract in aether docs/testing.md (0.539), produced by `spec._format_aeocha_v1` via the `AE_SPEC_FORMAT`/`AE_SPEC_REPORT` env pair; aeb's `driver_test` consumes it that way since aeb 009c830. `run_summary` here is now a pure forwarder — old aeb versions that only drained the IPC pipe fall back to exit-code granularity, which is their documented no-report path.
 
 ## Forwarder rules (why the facade is shaped the way it is)
 - **Whole-module imports + namespaced calls** (`import std.spec` … `spec.fail(msg)`), NOT selective imports: selectively importing a fn that reads its module's mutable var fails to pull the global (aether #1573) — `fail` and the retry family are exactly that shape.
@@ -31,9 +32,9 @@ Behavioral principles for those surfaces (matcher semantics, retry gotchas, mono
 - **Bootstrap**: `./bootstrap_aether.sh` for contributors with no suitable `ae`: release-first fallback, caches toolchains under `.aether/toolchains/`, prints the PATH export. `AETHER_VERSION` pins; `AEOCHA_AETHER_SOURCE=1` forces source build.
 
 ## Files/dirs worth knowing
-- `aeocha.ae`: the facade — forwarders + the kept aeb IPC report.
+- `aeocha.ae`: the facade — pure forwarders, nothing else.
 - `deprecation_notice.md`: what moved where, and why the keeps are keeps.
-- `tests/integration/`: aeb IPC (the KEEP's only test), expect-matchers smoke, mutation regression.
+- `tests/integration/`: expect-matchers smoke, mutation regression (which also exercises the env-file report path).
 - `tests/regression/`: compiler-feature regressions Aeocha exercises.
 - `example_self_test.ae`: how to use the framework; also the facade's broadest test.
 - `asks/archive/`: delivered/relocated asks (the fluent why-message ask became aether#1576).

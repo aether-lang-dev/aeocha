@@ -9,10 +9,11 @@ asserts, fluent chain), `std.os.testing` (process matchers), and
 `std.http.client.httptest` (HTTP matchers, `within`/`without`, `eventually`).
 `aeocha.ae` is a thin compatibility facade forwarding to those modules, so
 existing `import aeocha` code keeps working unchanged; new projects can
-`import std.spec` directly. What only Aeocha has: the structured `version=1`
-report `run_summary` sends over an IPC back-channel when run under
-[aeb](https://github.com/aether-lang-org/aeb), and mutation testing
-(`contrib/mutate`). See [deprecation_notice.md](deprecation_notice.md).
+`import std.spec` directly. What only Aeocha has: mutation testing
+(`contrib/mutate`). Structured `version=1` test reports (used by
+[aeb](https://github.com/aether-lang-org/aeb) and `contrib/mutate`) come from
+`std.spec`'s documented env-file transport — set `AE_SPEC_FORMAT=aeocha` and
+`AE_SPEC_REPORT=<path>`. See [deprecation_notice.md](deprecation_notice.md).
 
 ```aether
 import aeocha

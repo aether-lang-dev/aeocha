@@ -21,15 +21,16 @@
 // it, so mixing aeocha.* and spec.* calls in one process stays
 // coherent.
 //
-// What still LIVES here (no stdlib home):
-//   - run_summary's aeb IPC back-channel: the pinned version=1 KV+tab
-//     report written to ipc.parent_channel() when run under aeb's
-//     driver_test. std.spec grew a DIFFERENT transport for
-//     `ae test --format` (env-file via AE_SPEC_FORMAT/AE_SPEC_REPORT);
-//     this one stays until someone converges the two. Removing it
-//     breaks `aeb test`. See aeocha-aeb-ipc-reporting.md.
-//   - contrib/mutate — mutation testing (a source-rewriting tool, not
-//     a library surface).
+// What still LIVES here (no stdlib home): contrib/mutate — mutation
+// testing (a source-rewriting tool, not a library surface).
+//
+// The aeb IPC back-channel report is RETIRED (it was the last real code
+// here). The version=1 report format survives, but as std.spec's
+// env-file transport — a documented, versioned contract (aether
+// docs/testing.md, 0.539): a parent sets AE_SPEC_FORMAT=aeocha +
+// AE_SPEC_REPORT=<path> and spec.run_summary (which ours forwards to)
+// writes the report there. aeb's driver_test (aeb 009c830+) and
+// contrib/mutate both consume it that way now.
 //
 // Usage (unchanged):
 //
@@ -54,13 +55,6 @@
 import std.spec
 import std.os.testing
 import std.http.client.httptest
-import std.list
-import std.map
-import std.string
-import std.strbuilder
-import std.os
-import std.ipc
-import std.net
 
 exports (
     init,
@@ -353,162 +347,11 @@ expect_http_post_ok(url: string, msg: string) {
 }
 
 // ---------------------------------------------------------------------------
-// run_summary — the one hybrid: aeb IPC report (KEPT here), then the
-// std.spec summary for the human output / counter frees / exit code.
+// run_summary -> std.spec
 // ---------------------------------------------------------------------------
 
-// The IPC block runs FIRST because spec.run_summary frees the counter
-// refs and exit(1)s on failure — a failing run must still deliver its
-// report to the parent. Counters are read through fw (never through a
-// local ambient cell — that cell lives in std.spec now).
-run_summary(fw: ptr) {
-    // Structured per-it report — only emitted when invoked under
-    // a parent that opened a back-channel (e.g. aeb's
-    // driver_test). When `ae run foo.ae` from a terminal, the
-    // channel is -1 and this block is skipped — no behavior
-    // change for existing consumers.
-    //
-    // Format pinned at version=1: header KV block + "---\n"
-    // separator + tab-packed per-it rows. See
-    // aeocha-aeb-ipc-reporting.md for the full spec.
-    ch = ipc.parent_channel()
-    if ch >= 0 {
-        passed = ref_get(map.get_raw(fw, "passed"))
-        failed = ref_get(map.get_raw(fw, "failed"))
-        report = _format_aeb_report(fw, passed, failed)
-        // ae_fd_write + ae_fd_close mirror std.ipc.write_close
-        // semantics.
-        net.fd_write(ch, report)
-        net.fd_close(ch)
-    }
-
-    // Human ✓/✗ totals, AE_SPEC_FORMAT report (if requested), counter
-    // ref frees, and exit(1) on failure.
-    spec.run_summary(fw)
-}
-
-// Build the structured report payload for the aeb back-channel.
-// Format (version=1, ns-precision rows since 4e):
-//
-//   version=1
-//   total=N
-//   passed=N
-//   failed=N
-//   errored=N
-//   duration_ms=N        (retained for v1 readers; may round to 0)
-//   duration_ns=N        (added: full-precision total)
-//   ---
-//   PASS\t<index>\t"<name>"\t<duration_ns>\n
-//   FAIL\t<index>\t"<name>"\t<duration_ns>\t<failure_message>\n
-//   ...
-//
-// The per-row duration is nanoseconds (was ms) so sub-ms tests don't
-// all report 0; v1 row consumers match STATUS/index/"name"/message
-// and ignore the duration value, so this is wire-compatible.
-//
-// Self-truncates if the formatted report exceeds ~60K to avoid
-// pipe-buffer deadlock on Linux's 64K default. Drops
-// failure_messages first; if still over budget, drops per-row
-// durations; in the worst case the parent gets just the header.
-//
-// errored is always 0 in v1 — Aeocha categorises everything as
-// PASS or FAIL today. Reserved in the schema for future
-// enrichment (assertion threw, before_each crashed, etc.).
-//
-// Reads only fw slots that spec.init() stamps ("its",
-// "t_start_ns_str") — the fw map layout is std.spec's, unchanged from
-// the pre-thinning aeocha one.
-_format_aeb_report(fw: ptr, passed: int, failed: int) -> string {
-    its = map.get_raw(fw, "its")
-    n = list.size(its)
-    t_start_str = map.get_raw(fw, "t_start_ns_str")
-    t_start_ns = string.get_long(t_start_str)
-    // Monotonic end to match the monotonic start stamped in init() —
-    // mixing the two clocks would yield a garbage delta.
-    total_duration_ns = os.now_monotonic_ns() - t_start_ns
-    total_duration_ms = total_duration_ns / 1000000
-
-    // Wire compatibility: version stays 1 and duration_ms is retained
-    // so existing v1 parsers keep working. duration_ns is ADDED for
-    // full precision (4e) — a fast run that rounds to duration_ms=0
-    // still reports real nanoseconds. v1 readers ignore the extra key.
-    total = passed + failed
-    header = "version=1\ntotal=${total}\npassed=${passed}\nfailed=${failed}\nerrored=0\nduration_ms=${total_duration_ms}\nduration_ns=${total_duration_ns}\n---\n"
-
-    // Per-it rows. Try with full detail first; if oversized,
-    // drop failure_messages; if still oversized, drop durations.
-    // Budget: 60K leaves ~4K headroom under Linux's 64K pipe.
-    rows_full = _build_rows(its, n, 1, 1)
-    rep_full = string.concat(header, rows_full)
-    if string.length(rep_full) <= 60000 {
-        return rep_full
-    }
-    rows_no_msg = _build_rows(its, n, 0, 1)
-    rep_no_msg = string.concat(header, rows_no_msg)
-    if string.length(rep_no_msg) <= 60000 {
-        return rep_no_msg
-    }
-    rows_minimal = _build_rows(its, n, 0, 0)
-    rep_minimal = string.concat(header, rows_minimal)
-    if string.length(rep_minimal) <= 60000 {
-        return rep_minimal
-    }
-    // Worst case: header only. Parent still sees a valid v1 report,
-    // just with zero per-it detail.
-    return header
-}
-
-// Build the per-it rows, optionally including the
-// failure_message (if any) and duration columns. Used by
-// _format_aeb_report's progressive truncation.
-//
-// Built through std.strbuilder rather than a `string.concat`
-// accumulator: a suite with many `it`s would otherwise pay an
-// O(N²) realloc-and-memcpy of the whole prefix on every row.
-_build_rows(its: ptr, n: int, with_msg: int, with_dur: int) -> string {
-    b = strbuilder.new(1024)
-    i = 0
-    while i < n {
-        it_rec = list.get_raw(its, i)
-        status = map.get_raw(it_rec, "status")
-        name = map.get_raw(it_rec, "name")
-        idx = i + 1
-
-        // Base row: STATUS\tindex\t"name"  (\t=9, "=34)
-        strbuilder.append(b, status)
-        strbuilder.append_byte(b, 9)
-        strbuilder.append_int(b, idx)
-        strbuilder.append_byte(b, 9)
-        strbuilder.append_byte(b, 34)
-        strbuilder.append(b, name)
-        strbuilder.append_byte(b, 34)
-
-        if with_dur != 0 {
-            // Per-row duration is nanoseconds (4e): full precision,
-            // so sub-ms tests don't all report 0. The v1 row consumer
-            // matches on STATUS/index/"name"/message and does not parse
-            // the duration value, so widening ms->ns is wire-safe.
-            dur_str = map.get_raw(it_rec, "duration_ns_str")
-            strbuilder.append_byte(b, 9)
-            strbuilder.append(b, dur_str)
-        }
-
-        if with_msg != 0 {
-            if map.has(it_rec, "failure_message") == 1 {
-                msg = map.get_raw(it_rec, "failure_message")
-                strbuilder.append_byte(b, 9)
-                // Cap individual messages at 256 chars to keep any
-                // single row bounded.
-                if string.length(msg) > 256 {
-                    strbuilder.append(b, string.substring(msg, 0, 256))
-                } else {
-                    strbuilder.append(b, msg)
-                }
-            }
-        }
-
-        strbuilder.append_byte(b, 10)
-        i = i + 1
-    }
-    return strbuilder.finish(b)
-}
+// Human ✓/✗ totals, the AE_SPEC_FORMAT/AE_SPEC_REPORT structured report
+// (when a parent requested one), framework teardown, and exit(1) on
+// failure — all spec's. The old IPC-pipe report this fn used to emit is
+// retired; parents that want per-it granularity set the env pair.
+run_summary(fw: ptr) { spec.run_summary(fw) }

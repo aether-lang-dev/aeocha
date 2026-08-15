@@ -19,8 +19,9 @@ machine code. Mutation therefore has to, once per mutant:
 1. edit the SUT **source on disk** and clear the build cache,
 2. **`ae check`** the test — if the mutant doesn't type-check, it's *no-compile*
    (excluded from the score; a mutant that won't build was never really tested),
-3. **`ae build`** the test to a binary and run it, **draining Aeocha's structured
-   report** off the IPC channel rather than scraping stdout. The report's
+3. **`ae build`** the test to a binary and run it with
+   `AE_SPEC_FORMAT=aeocha` + `AE_SPEC_REPORT=<file>` set, **reading the
+   structured report** from that file rather than scraping stdout. The report's
    `failed=N` is the verdict: `N > 0` → killed, `N == 0` → survived.
 
 `mutate.ae` is that outer loop; your test file is completely unaware mutation is

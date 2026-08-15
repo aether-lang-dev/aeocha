@@ -13,7 +13,7 @@ parameters; `_ctx` is injected by an enclosing trailing block where noted.
 | `it_within(_ctx: ptr, description: string, budget: Duration, test_fn: fn)` | Runs a test and fails it when elapsed time is at least `budget`. |
 | `before_each(_ctx: ptr, setup: fn)` | Registers a hook inherited by descendant suites. Runs outermost first. |
 | `after_each(_ctx: ptr, teardown: fn)` | Registers a hook inherited by descendant suites. Runs innermost first. |
-| `run_summary(fw: ptr)` | Prints totals, emits an IPC report when connected, and exits 1 on failure. |
+| `run_summary(fw: ptr)` | Prints totals, writes a structured report when `AE_SPEC_FORMAT`/`AE_SPEC_REPORT` are set, and exits 1 on failure. |
 
 Trailing-block syntax supplies callback parameters:
 

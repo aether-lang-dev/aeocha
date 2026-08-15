@@ -72,9 +72,11 @@ nanosecond span measured by the caller.
 Call `run_summary(fw)` once after all suites. It prints totals and calls
 `exit(1)` if failures were recorded; a successful run returns normally.
 
-When a parent IPC channel exists, `run_summary` also sends the structured v1
-report used by Aether's `aeb` tooling. Reports contain run totals, duration, and
-one PASS or FAIL row per test.
+When the parent process sets `AE_SPEC_FORMAT` (`tap` or `aeocha`) and
+`AE_SPEC_REPORT` (a file path), `run_summary` also writes a structured report
+to that file — the documented env-file transport consumed by Aether's `aeb`
+tooling and `ae test --format`. The `aeocha` format contains run totals,
+duration, and one PASS or FAIL row per test.
 
 Because the successful path returns, a test that starts a permanently running
 actor or server should explicitly terminate it or end `main()` with `exit(0)`.
