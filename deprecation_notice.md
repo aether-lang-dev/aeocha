@@ -7,6 +7,17 @@ branch as a verbatim port; aeocha's copies are now duplicates that will
 drift. This note says what to delete from `aeocha.ae`, what MUST stay
 because it has no stdlib home yet, and the order to do it in.
 
+**SUNSET 2026-08-15 (final)**: backwards compatibility dropped by
+decision — the forwarder facade itself is deleted, along with the
+tests, docs, example, bootstrap script, TODO, and archived asks (all
+in git history). The repo is a tombstone: README (migration guide for
+the remaining consumers — aeo, aether-ui, avn, fbs-core, aeci,
+fight_flash_fraud), this notice, LLM.md, LICENSE. `import aeocha` no
+longer resolves anywhere; consumers do the import + rename work per
+the README. The cucumber plan refiled to aether as
+`asks/cucumber-style-acceptance-framework.md`. Archive the GitHub repo
+once the last consumer migrates.
+
 **EMPTIED 2026-08-15**: aether adopted the mutation tester as
 `std.mutation` (0.540.0, released) — with the runnable front-end, both
 regression fixtures, and docs — and 0.542.0 landed the fluent
