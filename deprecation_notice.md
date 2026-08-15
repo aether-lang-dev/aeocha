@@ -57,6 +57,11 @@ Name chosen per Go's `net/http/httptest`.)
 2. **Mutation testing** (`contrib/mutate/`). A source-rewriting tool,
    not a library surface. If it ever moves to aether it becomes an
    `ae mutate` subcommand — different discussion entirely.
+   *(Update 2026-08-15: that discussion is now open — an ask proposing
+   adoption into aether's std tree is filed as
+   `aether/asks/aeocha-mutate-in-std-mutation-testing.md`. Once it lands
+   and releases, `contrib/mutate` deletes here and this repo is eligible
+   for archival, pending the downstream `import aeocha` migrations.)*
 
 3. **The Cucumber plan** (`cucumber-plan.md`) — unbuilt design
    proposal; nothing to port.
