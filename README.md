@@ -50,12 +50,12 @@ maintainer notes rather than user guides.
 
 ## Requirements
 
-- An Aether `ae` whose stdlib includes `std.spec`, `std.os.testing`, and
-  `std.http.client.httptest` (landed via
-  [aether PR #1574](https://github.com/aether-lang-dev/aether/pull/1574) —
-  unreleased at the time of writing; pin the first release carrying it here
-  once cut)
-- `libpcre2-8` only when using `expect_stdout_matches_regex`
+- Aether **0.538.0 or newer** — the first release whose stdlib includes
+  `std.spec`, `std.os.testing`, and `std.http.client.httptest`
+  ([aether PR #1574](https://github.com/aether-lang-dev/aether/pull/1574)).
+  No system `libpcre2-8` needed: every toolchain this facade supports has
+  the vendored regex engine (aether 0.534.0+), so
+  `expect_stdout_matches_regex` always works.
 
 ## Install
 
